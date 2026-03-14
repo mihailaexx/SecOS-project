@@ -1,0 +1,5 @@
+.claude/
+.vagrant/
+.idea/
+*.log
+*.tmp
