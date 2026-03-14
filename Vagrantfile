@@ -35,7 +35,7 @@ Vagrant.configure("2") do |config|
     nfs.vm.hostname = "storage-node"
     nfs.vm.network "private_network", ip: "192.168.56.50"
     nfs.vm.provider "virtualbox" do |vb|
-      vb.memory = "512"
+      vb.memory = "1024"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
