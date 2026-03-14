@@ -1,0 +1,108 @@
+@startuml SSH Bastion HA Workflow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 10
+skinparam sequence {
+  ParticipantBorderColor #333333
+  ParticipantBackgroundColor #E8F4FD
+  LifeLineBorderColor #999999
+  ArrowColor #333333
+  GroupBorderColor #AAAAAA
+}
+
+title SSH Bastion HA — Authentication & Access Workflow
+
+actor "User\n(m.bulushev / admin1 / dba1)" as User
+box "lb-node\n192.168.56.10" #F0F8FF
+  participant "HAProxy\n:22" as HAProxy
+end box
+box "bastion-01 / bastion-02\n192.168.56.11 / .12" #F0FFF0
+  participant "SSHD" as SSHD
+  participant "PAM\n(pam-keycloak-oidc)" as PAM
+  participant "SSSD" as SSSD
+  participant "autofs" as Autofs
+end box
+box "idp-node\n192.168.56.20" #FFF8F0
+  participant "Keycloak\n:8080" as KC
+  participant "OpenLDAP\n:389" as LDAP
+end box
+box "storage-node\n192.168.56.50" #FFF0F5
+  participant "NFS Server" as NFS
+end box
+box "test-server\n192.168.56.60" #F5F0FF
+  participant "PostgreSQL 16\n:5432" as PG
+end box
+
+== SSH Authentication ==
+
+User -> HAProxy : SSH connect :22
+note right of HAProxy
+  Firewall: public zone
+  allows only SSH
+end note
+
+HAProxy -> SSHD : round-robin forward\n(bastion-01 or bastion-02)
+note right of SSHD
+  Firewall: accepts SSH
+  only from 192.168.56.10
+end note
+
+SSHD -> PAM : keyboard-interactive\n(prompt for password)
+PAM -> User : password prompt
+User -> PAM : enters password
+
+PAM -> KC : POST /realms/bastion-realm\n/protocol/openid-connect/token\n(direct access grant)
+note right of KC
+  Firewall: internal-bastion zone
+  ports 8080, 389
+  from 192.168.56.0/24
+end note
+
+KC -> KC : validate credentials\n& check role:\nbastion-pam-authentication
+
+alt credentials valid + role present
+  KC --> PAM : access token\n(with pam_roles claim)
+  PAM --> SSHD : auth SUCCESS
+else invalid credentials or missing role
+  KC --> PAM : 401 Unauthorized
+  PAM --> SSHD : auth FAILURE
+  SSHD --> User : Permission denied
+end
+
+== Session Setup ==
+
+SSHD -> SSSD : resolve user (NSS)
+SSSD -> LDAP : ldapsearch\ndc=bastion,dc=local
+LDAP --> SSSD : uid, gid, shell, home
+SSSD --> SSHD : user info
+
+SSHD -> Autofs : access /home/<username>
+Autofs -> NFS : mount\n192.168.56.50:/export/home/<user>
+NFS --> Autofs : NFS share
+Autofs --> SSHD : home directory ready
+
+SSHD --> User : shell session on bastion
+
+== Outbound Access (from bastion) ==
+
+User -> PG : psql (dba1 only)\nvia 192.168.56.60:5432
+note right of PG
+  Firewall: accepts SSH & :5432
+  only from .11 and .12
+  rejects all other SSH
+end note
+PG --> User : database session
+
+== Host Access ==
+
+actor "Host machine" as Host
+Host -> KC : http://localhost:8080\n(Vagrant port forward)
+note right of KC
+  public zone also
+  opens port 8080
+  for NAT interface
+end note
+KC --> Host : Keycloak Admin Console
+
+@enduml

@@ -22,7 +22,7 @@ EOF
 sudo exportfs -rav
 sudo systemctl enable --now nfs-server
 
-# --- Firewall ---
+# Firewall
 sudo dnf install -y firewalld
 
 sudo mkdir -p /etc/firewalld/zones
