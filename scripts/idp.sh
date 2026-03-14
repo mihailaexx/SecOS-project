@@ -5,6 +5,108 @@
 sudo dnf install -y openldap-servers openldap-clients
 sudo systemctl enable --now slapd
 
+# Load required LDAP schemas
+sudo ldapadd -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/cosine.ldif
+sudo ldapadd -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/inetorgperson.ldif
+sudo ldapadd -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/nis.ldif
+
+# Create MDB database for dc=bastion,dc=local
+sudo mkdir -p /var/lib/ldap
+sudo chown ldap:ldap /var/lib/ldap
+
+cat <<'EOF' | sudo ldapadd -Y EXTERNAL -H ldapi:///
+dn: olcDatabase=mdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: mdb
+olcDbDirectory: /var/lib/ldap
+olcSuffix: dc=bastion,dc=local
+olcRootDN: cn=admin,dc=bastion,dc=local
+olcRootPW: admin
+olcDbIndex: objectClass eq
+olcDbIndex: uid eq
+olcAccess: to * by * read
+EOF
+
+# Populate LDAP directory
+cat <<'EOF' | ldapadd -x -D "cn=admin,dc=bastion,dc=local" -w admin
+dn: dc=bastion,dc=local
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Bastion Local
+dc: bastion
+
+dn: ou=People,dc=bastion,dc=local
+objectClass: top
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=bastion,dc=local
+objectClass: top
+objectClass: organizationalUnit
+ou: Groups
+
+dn: uid=m.bulushev,ou=People,dc=bastion,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: m.bulushev
+cn: Mikhail Bulushev
+sn: Bulushev
+uidNumber: 1001
+gidNumber: 2000
+homeDirectory: /home/m.bulushev
+loginShell: /bin/bash
+
+dn: uid=admin1,ou=People,dc=bastion,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: admin1
+cn: Admin One
+sn: Admin
+uidNumber: 1002
+gidNumber: 2001
+homeDirectory: /home/admin1
+loginShell: /bin/bash
+
+dn: uid=dba1,ou=People,dc=bastion,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: dba1
+cn: DBA One
+sn: DBA
+uidNumber: 1003
+gidNumber: 2002
+homeDirectory: /home/dba1
+loginShell: /bin/bash
+
+dn: cn=bastion-users,ou=Groups,dc=bastion,dc=local
+objectClass: top
+objectClass: posixGroup
+cn: bastion-users
+gidNumber: 2000
+memberUid: m.bulushev
+memberUid: admin1
+memberUid: dba1
+
+dn: cn=bastion-admins,ou=Groups,dc=bastion,dc=local
+objectClass: top
+objectClass: posixGroup
+cn: bastion-admins
+gidNumber: 2001
+memberUid: admin1
+
+dn: cn=dba,ou=Groups,dc=bastion,dc=local
+objectClass: top
+objectClass: posixGroup
+cn: dba
+gidNumber: 2002
+memberUid: dba1
+EOF
+
 # Java (required by Keycloak)
 sudo dnf install -y java-21-openjdk-headless
 
