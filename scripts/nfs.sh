@@ -6,6 +6,15 @@ sudo dnf install -y nfs-utils
 sudo mkdir -p /export/home
 sudo chmod 755 /export/home
 
+# Create user home directories on NFS share
+for u in m.bulushev admin1 dba1; do
+  sudo mkdir -p /export/home/$u
+  sudo chmod 700 /export/home/$u
+done
+sudo chown 1001:2000 /export/home/m.bulushev
+sudo chown 1002:2001 /export/home/admin1
+sudo chown 1003:2002 /export/home/dba1
+
 cat <<'EOF' | sudo tee /etc/exports
 /export/home 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash)
 EOF

@@ -85,14 +85,14 @@ sudo groupadd -g 2000 bastion-users
 sudo groupadd -g 2001 bastion-admins
 sudo groupadd -g 2002 dba
 
-# Users
-sudo useradd -m -g bastion-users -s /bin/bash m.bulushev
+# Users (no -m: home dirs live on NFS via autofs)
+sudo useradd -M -u 1001 -g bastion-users -s /bin/bash m.bulushev
 sudo usermod -aG bastion-users m.bulushev
 
-sudo useradd -m -g bastion-admins -s /bin/bash admin1
+sudo useradd -M -u 1002 -g bastion-admins -s /bin/bash admin1
 sudo usermod -aG bastion-users,bastion-admins admin1
 
-sudo useradd -m -g dba -s /bin/bash dba1
+sudo useradd -M -u 1003 -g dba -s /bin/bash dba1
 sudo usermod -aG bastion-users,dba dba1
 
 # Sudoers
