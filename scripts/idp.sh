@@ -188,18 +188,30 @@ cat <<'EOF' | sudo tee /opt/keycloak/data/import/bastion-realm.json
     {
       "username": "m.bulushev",
       "enabled": true,
+      "firstName": "Mikhail",
+      "lastName": "Bulushev",
+      "email": "m.bulushev@bastion.local",
+      "emailVerified": true,
       "credentials": [{ "type": "password", "value": "password", "temporary": false }],
       "realmRoles": ["bastion-pam-authentication"]
     },
     {
       "username": "admin1",
       "enabled": true,
+      "firstName": "Admin",
+      "lastName": "One",
+      "email": "admin1@bastion.local",
+      "emailVerified": true,
       "credentials": [{ "type": "password", "value": "password", "temporary": false }],
       "realmRoles": ["bastion-pam-authentication"]
     },
     {
       "username": "dba1",
       "enabled": true,
+      "firstName": "DBA",
+      "lastName": "One",
+      "email": "dba1@bastion.local",
+      "emailVerified": true,
       "credentials": [{ "type": "password", "value": "password", "temporary": false }],
       "realmRoles": ["bastion-pam-authentication"]
     }
