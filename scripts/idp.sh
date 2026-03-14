@@ -124,7 +124,7 @@ sudo chown -R keycloak:keycloak /opt/keycloak
 sudo mkdir -p /opt/keycloak/data/import
 cat <<'EOF' | sudo tee /opt/keycloak/data/import/bastion-realm.json
 {
-  "realm": "bastion-realm",
+  "realm": "bastion",
   "enabled": true,
   "roles": {
     "realm": [
