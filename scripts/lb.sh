@@ -32,7 +32,7 @@ backend ssh_bastions
 EOF
 
 # Free port 22 for HAProxy by binding sshd only to the Vagrant NAT interface
-ETH0_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+ETH0_IP=$(ip -4 addr show enp0s3 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
 sudo sed -i '/^#\?ListenAddress/d' /etc/ssh/sshd_config
 echo -e "ListenAddress ${ETH0_IP}\nListenAddress 127.0.0.1" | sudo tee -a /etc/ssh/sshd_config
 sudo systemctl restart sshd

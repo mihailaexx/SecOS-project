@@ -14,7 +14,7 @@ Vagrant.configure("2") do |config|
     lb.vm.hostname = "lb-node"
     lb.vm.network "private_network", ip: "192.168.56.10"
     lb.vm.provider "virtualbox" do |vb|
-      vb.memory = "512"
+      vb.memory = "1024"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
@@ -71,4 +71,9 @@ Vagrant.configure("2") do |config|
     end
     target.vm.provision "shell", path: "scripts/target.sh"
   end
+  config.vm.provision "shell", inline: <<-SHELL
+    restorecon -rv /etc/NetworkManager/system-connections/
+    nmcli con mod "enp0s8" ipv4.never-default yes 2>/dev/null || true
+    nmcli con up "enp0s8" 2>/dev/null || true
+  SHELL
 end
