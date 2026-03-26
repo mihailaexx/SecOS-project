@@ -1,0 +1,180 @@
+---
+- name: Install packages
+  dnf:
+    name:
+      - nfs-utils
+      - sssd
+      - sssd-ldap
+      - oddjob-mkhomedir
+      - autofs
+      - cronie
+    state: present
+
+# ── AutoFS for NFS home directories ──
+- name: Deploy autofs master config
+  copy:
+    src: home.autofs
+    dest: /etc/auto.master.d/home.autofs
+  notify: restart autofs
+
+- name: Deploy autofs home map
+  copy:
+    src: auto.home
+    dest: /etc/auto.home
+  notify: restart autofs
+
+- name: Enable and start autofs
+  systemd:
+    name: autofs
+    enabled: true
+    state: started
+
+# ── SSSD (LDAP user/group resolution) ──
+- name: Deploy SSSD configuration
+  template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    mode: "0600"
+  notify: restart sssd
+
+- name: Enable and start SSSD
+  systemd:
+    name: sssd
+    enabled: true
+    state: started
+
+- name: Configure authselect with SSSD and mkhomedir
+  command: authselect select sssd with-mkhomedir --force
+  changed_when: false
+
+- name: Enable and start oddjobd
+  systemd:
+    name: oddjobd
+    enabled: true
+    state: started
+
+# ── pam-keycloak-oidc ──
+- name: Create pam-keycloak-oidc directory
+  file:
+    path: /opt/pam-keycloak-oidc
+    state: directory
+
+- name: Download pam-keycloak-oidc binary
+  get_url:
+    url: https://github.com/zhaow-de/pam-keycloak-oidc/releases/download/r1.3.0/pam-keycloak-oidc.linux-amd64
+    dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc
+    mode: "0755"
+
+- name: Deploy pam-keycloak-oidc config
+  template:
+    src: pam-keycloak-oidc.tml.j2
+    dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
+
+# ── PAM stack for sshd ──
+- name: Deploy PAM sshd config
+  template:
+    src: sshd-pam.j2
+    dest: /etc/pam.d/sshd
+
+# ── SSHD config ──
+- name: Deploy sshd bastion auth drop-in
+  template:
+    src: 40-bastion-auth.conf.j2
+    dest: /etc/ssh/sshd_config.d/40-bastion-auth.conf
+  notify: restart sshd
+
+- name: Fix SELinux context on sshd drop-in
+  command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
+  changed_when: false
+
+# ── Groups ──
+- name: Create groups
+  group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid }}"
+  loop:
+    - { name: bastion-users, gid: 2000 }
+    - { name: bastion-admins, gid: 2001 }
+    - { name: dba, gid: 2002 }
+
+# ── Users (no home dirs — they live on NFS via autofs) ──
+- name: Create user m.bulushev
+  user:
+    name: m.bulushev
+    uid: 1001
+    group: bastion-users
+    groups: bastion-users
+    shell: /bin/bash
+    create_home: false
+
+- name: Create user admin1
+  user:
+    name: admin1
+    uid: 1002
+    group: bastion-admins
+    groups: bastion-users,bastion-admins
+    shell: /bin/bash
+    create_home: false
+
+- name: Create user dba1
+  user:
+    name: dba1
+    uid: 1003
+    group: dba
+    groups: bastion-users,dba
+    shell: /bin/bash
+    create_home: false
+
+# ── Sudoers ──
+- name: Deploy bastion-admins sudoers
+  copy:
+    content: |
+      %bastion-admins ALL=(root) /usr/bin/systemctl restart sssd
+      %bastion-admins ALL=(root) /usr/bin/systemctl restart haproxy
+      %bastion-admins ALL=(root) /usr/sbin/exportfs -ra
+    dest: /etc/sudoers.d/bastion-admins
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+# ── Firewall ──
+- name: Install firewalld
+  dnf:
+    name: firewalld
+    state: present
+
+- name: Deploy firewalld public zone
+  template:
+    src: firewalld-public.xml.j2
+    dest: /etc/firewalld/zones/public.xml
+  notify: reload firewalld
+
+- name: Enable and start firewalld
+  systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+# ── Backups ──
+- name: Mount NFS backup share
+  mount:
+    path: /mnt/backups
+    src: "192.168.56.50:/export/backups"
+    fstype: nfs
+    opts: _netdev,defaults
+    state: mounted
+
+- name: Daily config backup cron
+  cron:
+    name: backup-configs
+    minute: "0"
+    hour: "3"
+    user: root
+    job: >-
+      mkdir -p /mnt/backups/configs/{{ inventory_hostname }}
+      && rsync -a /etc/ /mnt/backups/configs/{{ inventory_hostname }}/
+
+- name: Enable crond
+  systemd:
+    name: crond
+    enabled: true
+    state: started

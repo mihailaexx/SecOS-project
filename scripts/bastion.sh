@@ -72,14 +72,15 @@ session    optional                    pam_mkhomedir.so
 EOF
 
 # SSHD config for keyboard-interactive auth (drop-in overrides RedHat defaults)
-cat <<'EOF' | sudo tee /etc/ssh/sshd_config.d/60-bastion-auth.conf
+cat <<'EOF' | sudo tee /etc/ssh/sshd_config.d/40-bastion-auth.conf
 UsePAM yes
 PasswordAuthentication no
 PubkeyAuthentication no
 KbdInteractiveAuthentication yes
 AuthenticationMethods keyboard-interactive
 EOF
-sudo systemctl restart sshd
+sudo restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
+sudo sshd -t && sudo systemctl restart sshd
 
 # Groups
 sudo groupadd -g 2000 bastion-users

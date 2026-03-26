@@ -1,0 +1,218 @@
+---
+# ── OpenLDAP ──
+- name: Install OpenLDAP
+  dnf:
+    name:
+      - openldap-servers
+      - openldap-clients
+    state: present
+
+- name: Enable and start slapd
+  systemd:
+    name: slapd
+    enabled: true
+    state: started
+
+- name: Load LDAP schemas
+  command: "ldapadd -Y EXTERNAL -H ldapi:/// -f {{ item }}"
+  loop:
+    - /etc/openldap/schema/cosine.ldif
+    - /etc/openldap/schema/inetorgperson.ldif
+    - /etc/openldap/schema/nis.ldif
+  register: schema_result
+  failed_when: schema_result.rc != 0 and 'already exists' not in schema_result.stderr
+  changed_when: schema_result.rc == 0
+
+- name: Create LDAP data directory
+  file:
+    path: /var/lib/ldap
+    state: directory
+    owner: ldap
+    group: ldap
+
+- name: Configure MDB database
+  shell: |
+    ldapsearch -Y EXTERNAL -H ldapi:/// -b "cn=config" "(olcSuffix=dc=bastion,dc=local)" dn 2>/dev/null | grep -q "dn:"
+    if [ $? -ne 0 ]; then
+      cat <<'LDIF' | ldapadd -Y EXTERNAL -H ldapi:///
+    dn: olcDatabase=mdb,cn=config
+    objectClass: olcDatabaseConfig
+    objectClass: olcMdbConfig
+    olcDatabase: mdb
+    olcDbDirectory: /var/lib/ldap
+    olcSuffix: dc=bastion,dc=local
+    olcRootDN: cn=admin,dc=bastion,dc=local
+    olcRootPW: admin
+    olcDbIndex: objectClass eq
+    olcDbIndex: uid eq
+    olcAccess: to * by * read
+    LDIF
+    fi
+  register: mdb_result
+  changed_when: "'adding new entry' in mdb_result.stdout"
+
+- name: Populate LDAP directory
+  shell: |
+    ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" -D "cn=admin,dc=bastion,dc=local" -w admin "(dc=bastion)" dn 2>/dev/null | grep -q "dn:"
+    if [ $? -ne 0 ]; then
+      cat <<'LDIF' | ldapadd -x -D "cn=admin,dc=bastion,dc=local" -w admin
+    {{ lookup('file', 'ldap-base.ldif') }}
+    LDIF
+    fi
+  register: ldap_pop_result
+  changed_when: "'adding new entry' in ldap_pop_result.stdout"
+
+# ── Java ──
+- name: Install Java
+  dnf:
+    name: java-21-openjdk-headless
+    state: present
+
+# ── Keycloak ──
+- name: Check if Keycloak is installed
+  stat:
+    path: /opt/keycloak
+  register: keycloak_dir
+
+- name: Download Keycloak
+  get_url:
+    url: "https://github.com/keycloak/keycloak/releases/download/26.5.4/keycloak-26.5.4.tar.gz"
+    dest: /tmp/keycloak-26.5.4.tar.gz
+  when: not keycloak_dir.stat.exists
+
+- name: Extract Keycloak
+  unarchive:
+    src: /tmp/keycloak-26.5.4.tar.gz
+    dest: /opt
+    remote_src: true
+  when: not keycloak_dir.stat.exists
+
+- name: Rename Keycloak directory
+  command: mv /opt/keycloak-26.5.4 /opt/keycloak
+  when: not keycloak_dir.stat.exists
+
+- name: Create keycloak user
+  user:
+    name: keycloak
+    system: true
+    shell: /sbin/nologin
+    home: /opt/keycloak
+    create_home: false
+
+- name: Set Keycloak ownership
+  file:
+    path: /opt/keycloak
+    state: directory
+    owner: keycloak
+    group: keycloak
+    recurse: true
+
+- name: Create realm import directory
+  file:
+    path: /opt/keycloak/data/import
+    state: directory
+    owner: keycloak
+    group: keycloak
+
+- name: Deploy realm import file
+  template:
+    src: bastion-realm.json.j2
+    dest: /opt/keycloak/data/import/bastion-realm.json
+    owner: keycloak
+    group: keycloak
+
+- name: Deploy Keycloak configuration
+  template:
+    src: keycloak.conf.j2
+    dest: /opt/keycloak/conf/keycloak.conf
+  notify: restart keycloak
+
+- name: Deploy Keycloak systemd service
+  template:
+    src: keycloak.service.j2
+    dest: /etc/systemd/system/keycloak.service
+  notify:
+    - daemon reload
+    - restart keycloak
+
+- name: Enable and start Keycloak
+  systemd:
+    name: keycloak
+    enabled: true
+    state: started
+
+# ── Firewall ──
+- name: Install firewalld
+  dnf:
+    name: firewalld
+    state: present
+
+- name: Deploy firewalld internal zone
+  template:
+    src: firewalld-internal-bastion.xml.j2
+    dest: /etc/firewalld/zones/internal-bastion.xml
+  notify: reload firewalld
+
+- name: Deploy firewalld public zone
+  template:
+    src: firewalld-public.xml.j2
+    dest: /etc/firewalld/zones/public.xml
+  notify: reload firewalld
+
+- name: Enable and start firewalld
+  systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+# ── Backups ──
+- name: Install NFS utils and cronie
+  dnf:
+    name:
+      - nfs-utils
+      - cronie
+    state: present
+
+- name: Mount NFS backup share
+  mount:
+    path: /mnt/backups
+    src: "192.168.56.50:/export/backups"
+    fstype: nfs
+    opts: _netdev,defaults
+    state: mounted
+
+- name: Daily LDAP backup cron
+  cron:
+    name: backup-ldap
+    minute: "0"
+    hour: "2"
+    user: root
+    job: >-
+      slapcat | gzip > /mnt/backups/ldap/ldap-$(date +%F).ldif.gz
+      && find /mnt/backups/ldap/ -name "*.ldif.gz" -mtime +7 -delete
+
+- name: Daily Keycloak realm export cron
+  cron:
+    name: backup-keycloak
+    minute: "30"
+    hour: "2"
+    user: root
+    job: >-
+      /opt/keycloak/bin/kc.sh export --dir /mnt/backups/keycloak/ --realm bastion
+      && find /mnt/backups/keycloak/ -name "*.json" -mtime +7 -delete
+
+- name: Daily config backup cron
+  cron:
+    name: backup-configs
+    minute: "0"
+    hour: "3"
+    user: root
+    job: >-
+      mkdir -p /mnt/backups/configs/idp-node
+      && rsync -a /etc/ /mnt/backups/configs/idp-node/
+
+- name: Enable crond
+  systemd:
+    name: crond
+    enabled: true
+    state: started

@@ -1,0 +1,15 @@
+---
+- name: restart haproxy
+  systemd:
+    name: haproxy
+    state: restarted
+
+- name: restart sshd
+  systemd:
+    name: sshd
+    state: restarted
+
+- name: reload firewalld
+  systemd:
+    name: firewalld
+    state: reloaded

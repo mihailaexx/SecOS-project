@@ -1,0 +1,136 @@
+---
+# ── Dedicated disk for PostgreSQL data ──
+- name: Format PostgreSQL data disk with XFS
+  filesystem:
+    fstype: xfs
+    dev: /dev/sdb
+
+- name: Mount PostgreSQL data disk
+  mount:
+    path: /var/lib/pgsql
+    src: /dev/sdb
+    fstype: xfs
+    state: mounted
+
+# ── PostgreSQL ──
+- name: Install PostgreSQL repo
+  dnf:
+    name: https://download.postgresql.org/pub/repos/yum/reporpms/F-42-x86_64/pgdg-fedora-repo-latest.noarch.rpm
+    state: present
+    disable_gpg_check: true
+
+- name: Disable built-in postgresql module
+  command: dnf -qy module disable postgresql
+  changed_when: false
+
+- name: Install PostgreSQL 16
+  dnf:
+    name:
+      - postgresql16-server
+      - postgresql16
+    state: present
+
+- name: Set PostgreSQL data directory ownership
+  file:
+    path: /var/lib/pgsql
+    owner: postgres
+    group: postgres
+
+- name: Check if PostgreSQL is initialized
+  stat:
+    path: /var/lib/pgsql/16/data/PG_VERSION
+  register: pg_init
+
+- name: Initialize PostgreSQL
+  command: /usr/pgsql-16/bin/postgresql-16-setup initdb
+  when: not pg_init.stat.exists
+
+- name: Deploy pg_hba.conf
+  template:
+    src: pg_hba.conf.j2
+    dest: /var/lib/pgsql/16/data/pg_hba.conf
+    owner: postgres
+    group: postgres
+  notify: restart postgresql
+
+- name: Enable and start PostgreSQL
+  systemd:
+    name: postgresql-16
+    enabled: true
+    state: started
+
+- name: Create dba1 role
+  shell: |
+    sudo -u postgres /usr/pgsql-16/bin/psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='dba1'" | grep -q 1 \
+      || sudo -u postgres /usr/pgsql-16/bin/psql -c "CREATE ROLE dba1 WITH LOGIN PASSWORD 'dba' SUPERUSER;"
+  register: dba_result
+  changed_when: "'CREATE ROLE' in dba_result.stdout"
+
+- name: Deploy dba sudoers
+  copy:
+    content: |
+      %dba ALL=(postgres) /usr/pgsql-16/bin/psql
+      %dba ALL=(root) /usr/bin/systemctl restart postgresql-16
+    dest: /etc/sudoers.d/dba
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+# ── Backups ──
+- name: Install NFS utils and cronie
+  dnf:
+    name:
+      - nfs-utils
+      - cronie
+    state: present
+
+- name: Mount NFS backup share
+  mount:
+    path: /mnt/backups
+    src: "192.168.56.50:/export/backups"
+    fstype: nfs
+    opts: _netdev,defaults
+    state: mounted
+
+- name: Daily PostgreSQL backup cron
+  cron:
+    name: backup-postgres
+    minute: "0"
+    hour: "2"
+    user: postgres
+    job: >-
+      /usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-$(date +%F).sql.gz
+      && find /mnt/backups/postgres/ -name "*.sql.gz" -mtime +7 -delete
+
+- name: Daily config backup cron
+  cron:
+    name: backup-configs
+    minute: "0"
+    hour: "3"
+    user: root
+    job: >-
+      mkdir -p /mnt/backups/configs/test-server
+      && rsync -a /etc/ /mnt/backups/configs/test-server/
+
+- name: Enable crond
+  systemd:
+    name: crond
+    enabled: true
+    state: started
+
+# ── Firewall ──
+- name: Install firewalld
+  dnf:
+    name: firewalld
+    state: present
+
+- name: Deploy firewalld public zone
+  template:
+    src: firewalld-public.xml.j2
+    dest: /etc/firewalld/zones/public.xml
+  notify: reload firewalld
+
+- name: Enable and start firewalld
+  systemd:
+    name: firewalld
+    enabled: true
+    state: started

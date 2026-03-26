@@ -1,0 +1,10 @@
+---
+- name: restart postgresql
+  systemd:
+    name: postgresql-16
+    state: restarted
+
+- name: reload firewalld
+  systemd:
+    name: firewalld
+    state: reloaded

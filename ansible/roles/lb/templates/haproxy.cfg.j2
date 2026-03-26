@@ -1,0 +1,23 @@
+global
+    log /dev/log local0
+    chroot /var/lib/haproxy
+    stats socket /var/lib/haproxy/stats
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    mode tcp
+    log global
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+
+frontend ssh_front
+    bind 192.168.56.10:22
+    default_backend ssh_bastions
+
+backend ssh_bastions
+    balance roundrobin
+    server bastion-01 192.168.56.11:22 check
+    server bastion-02 192.168.56.12:22 check

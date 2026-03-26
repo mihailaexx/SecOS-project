@@ -1,0 +1,8 @@
+---
+- name: reload nfs
+  command: exportfs -rav
+
+- name: reload firewalld
+  systemd:
+    name: firewalld
+    state: reloaded

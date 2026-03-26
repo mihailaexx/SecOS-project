@@ -1,0 +1,104 @@
+---
+- name: Install packages
+  dnf:
+    name:
+      - nfs-utils
+      - mdadm
+      - cronie
+    state: present
+
+- name: Create RAID1 array from sdb + sdc
+  command: mdadm --create /dev/md0 --level=1 --raid-devices=2 --run /dev/sdb /dev/sdc
+  args:
+    creates: /dev/md0
+
+- name: Format RAID array with XFS
+  filesystem:
+    fstype: xfs
+    dev: /dev/md0
+
+- name: Mount RAID array at /export/home
+  mount:
+    path: /export/home
+    src: /dev/md0
+    fstype: xfs
+    state: mounted
+
+- name: Save mdadm configuration
+  shell: mdadm --detail --scan > /etc/mdadm.conf
+  args:
+    creates: /etc/mdadm.conf
+
+- name: Set /export/home permissions
+  file:
+    path: /export/home
+    mode: "0755"
+
+- name: Create user home directories
+  file:
+    path: "/export/home/{{ item.name }}"
+    state: directory
+    owner: "{{ item.uid }}"
+    group: "{{ item.gid }}"
+    mode: "0700"
+  loop:
+    - { name: m.bulushev, uid: "1001", gid: "2000" }
+    - { name: admin1, uid: "1002", gid: "2001" }
+    - { name: dba1, uid: "1003", gid: "2002" }
+
+- name: Create backup directories
+  file:
+    path: "/export/backups/{{ item }}"
+    state: directory
+  loop:
+    - postgres
+    - ldap
+    - keycloak
+    - configs
+    - homes
+
+- name: Configure NFS exports
+  template:
+    src: exports.j2
+    dest: /etc/exports
+  notify: reload nfs
+
+- name: Enable and start NFS server
+  systemd:
+    name: nfs-server
+    enabled: true
+    state: started
+
+- name: Weekly home backup cron
+  cron:
+    name: backup-homes
+    minute: "0"
+    hour: "2"
+    weekday: "0"
+    user: root
+    job: >-
+      tar czf /export/backups/homes/homes-$(date +%F).tar.gz -C / export/home/
+      && find /export/backups/homes/ -name "*.tar.gz" -mtime +7 -delete
+
+- name: Enable crond
+  systemd:
+    name: crond
+    enabled: true
+    state: started
+
+- name: Install firewalld
+  dnf:
+    name: firewalld
+    state: present
+
+- name: Deploy firewalld zone
+  template:
+    src: firewalld-internal-bastion.xml.j2
+    dest: /etc/firewalld/zones/internal-bastion.xml
+  notify: reload firewalld
+
+- name: Enable and start firewalld
+  systemd:
+    name: firewalld
+    enabled: true
+    state: started

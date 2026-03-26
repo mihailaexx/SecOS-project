@@ -1,0 +1,27 @@
+---
+# Provisioning order: storage → idp → lb → bastions → target
+
+- name: Configure storage-node (NFS + RAID1)
+  hosts: storage
+  roles:
+    - storage
+
+- name: Configure idp-node (Keycloak + OpenLDAP)
+  hosts: idp
+  roles:
+    - idp
+
+- name: Configure lb-node (HAProxy)
+  hosts: lb
+  roles:
+    - lb
+
+- name: Configure bastion nodes (SSH + OIDC)
+  hosts: bastions
+  roles:
+    - bastion
+
+- name: Configure test-server (PostgreSQL)
+  hosts: target
+  roles:
+    - target

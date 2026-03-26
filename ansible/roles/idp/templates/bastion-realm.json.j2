@@ -1,0 +1,94 @@
+{
+  "realm": "bastion",
+  "enabled": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "bastion-pam-authentication",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "clientScopes": [
+    {
+      "name": "pam_roles",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "pam roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "multivalued": "true",
+            "claim.name": "pam_roles",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "bastion-ssh",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "bastion-ssh-secret",
+      "redirectUris": ["urn:ietf:wg:oauth:2.0:oob"],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "access.token.signed.response.alg": "RS256"
+      },
+      "defaultClientScopes": ["pam_roles"]
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "bastion-ssh",
+      "roles": ["bastion-pam-authentication"]
+    }
+  ],
+  "users": [
+    {
+      "username": "m.bulushev",
+      "enabled": true,
+      "firstName": "Mikhail",
+      "lastName": "Bulushev",
+      "email": "m.bulushev@bastion.local",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["bastion-pam-authentication"]
+    },
+    {
+      "username": "admin1",
+      "enabled": true,
+      "firstName": "Admin",
+      "lastName": "One",
+      "email": "admin1@bastion.local",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["bastion-pam-authentication"]
+    },
+    {
+      "username": "dba1",
+      "enabled": true,
+      "firstName": "DBA",
+      "lastName": "One",
+      "email": "dba1@bastion.local",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["bastion-pam-authentication"]
+    }
+  ]
+}

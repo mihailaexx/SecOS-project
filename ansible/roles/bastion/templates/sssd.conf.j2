@@ -1,0 +1,12 @@
+[sssd]
+services = nss, pam
+domains = bastion.local
+
+[domain/bastion.local]
+id_provider = ldap
+auth_provider = ldap
+ldap_uri = ldap://192.168.56.20
+ldap_search_base = dc=bastion,dc=local
+ldap_id_use_start_tls = False
+cache_credentials = True
+enumerate = True

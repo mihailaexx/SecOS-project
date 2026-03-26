@@ -9,10 +9,8 @@ Vagrant.configure("2") do |config|
   config.vm.box = "fedora/42-cloud-base"
   config.vm.box_check_update = false
 
-  # Provisioning order: nfs → idp → lb → bastions → target
-  # Storage-node first (NFS exports + RAID1), then IdP (LDAP/Keycloak),
-  # then everything else that depends on them. Cattle, not pets —
-  # destroy and recreate any VM from scratch with `vagrant destroy <vm> && vagrant up <vm>`.
+  # VMs boot only — provision manually with:
+  #   cd ansible && ansible-playbook site.yml
 
   config.vm.define "nfs" do |nfs|
     nfs.vm.hostname = "storage-node"
@@ -25,7 +23,6 @@ Vagrant.configure("2") do |config|
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    nfs.vm.provision "shell", path: "scripts/nfs.sh"
   end
   config.vm.define "idp" do |idp|
     idp.vm.hostname = "idp-node"
@@ -37,7 +34,6 @@ Vagrant.configure("2") do |config|
       vb.cpus = 4
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    idp.vm.provision "shell", path: "scripts/idp.sh"
   end
   config.vm.define "lb" do |lb|
     lb.vm.hostname = "lb-node"
@@ -48,7 +44,6 @@ Vagrant.configure("2") do |config|
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    lb.vm.provision "shell", path: "scripts/lb.sh"
   end
   config.vm.define "bastion1" do |bastion1|
     bastion1.vm.hostname = "bastion-01"
@@ -59,7 +54,6 @@ Vagrant.configure("2") do |config|
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    bastion1.vm.provision "shell", path: "scripts/bastion.sh"
   end
   config.vm.define "bastion2" do |bastion2|
     bastion2.vm.hostname = "bastion-02"
@@ -70,7 +64,6 @@ Vagrant.configure("2") do |config|
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    bastion2.vm.provision "shell", path: "scripts/bastion.sh"
   end
   config.vm.define "target" do |target|
     target.vm.hostname = "test-server"
@@ -82,7 +75,6 @@ Vagrant.configure("2") do |config|
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    target.vm.provision "shell", path: "scripts/target.sh"
   end
   config.vm.provision "shell", inline: <<-SHELL
     restorecon -rv /etc/NetworkManager/system-connections/

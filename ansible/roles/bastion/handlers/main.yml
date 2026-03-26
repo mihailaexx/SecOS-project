@@ -1,0 +1,24 @@
+---
+- name: restart autofs
+  systemd:
+    name: autofs
+    state: restarted
+
+- name: restart sssd
+  systemd:
+    name: sssd
+    state: restarted
+
+- name: validate sshd config
+  command: sshd -t
+  listen: restart sshd
+
+- name: restart sshd
+  systemd:
+    name: sshd
+    state: restarted
+
+- name: reload firewalld
+  systemd:
+    name: firewalld
+    state: reloaded

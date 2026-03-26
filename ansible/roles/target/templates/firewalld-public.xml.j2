@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Public</short>
+  <rule family="ipv4">
+    <source address="192.168.56.11/32"/>
+    <port port="22" protocol="tcp"/>
+    <accept/>
+  </rule>
+  <rule family="ipv4">
+    <source address="192.168.56.12/32"/>
+    <port port="22" protocol="tcp"/>
+    <accept/>
+  </rule>
+  <rule family="ipv4">
+    <source address="192.168.56.11/32"/>
+    <port port="5432" protocol="tcp"/>
+    <accept/>
+  </rule>
+  <rule family="ipv4">
+    <source address="192.168.56.12/32"/>
+    <port port="5432" protocol="tcp"/>
+    <accept/>
+  </rule>
+  <rule family="ipv4">
+    <port port="22" protocol="tcp"/>
+    <reject/>
+  </rule>
+</zone>

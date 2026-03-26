@@ -1,0 +1,93 @@
+---
+- name: Install HAProxy
+  dnf:
+    name: haproxy
+    state: present
+
+- name: Deploy HAProxy configuration
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+  notify: restart haproxy
+
+- name: Get NAT interface IP
+  shell: ip -4 addr show enp0s3 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
+  register: eth0_ip
+  changed_when: false
+
+- name: Remove existing ListenAddress lines from sshd_config
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?ListenAddress'
+    state: absent
+
+- name: Bind sshd to NAT interface only
+  blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} MANAGED BY ANSIBLE - SSHD LISTEN"
+    block: |
+      ListenAddress {{ eth0_ip.stdout }}
+      ListenAddress 127.0.0.1
+  notify: restart sshd
+
+- name: Allow HAProxy to connect to any port (SELinux)
+  seboolean:
+    name: haproxy_connect_any
+    state: true
+    persistent: true
+
+- name: Enable and start HAProxy
+  systemd:
+    name: haproxy
+    enabled: true
+    state: started
+
+# ── Firewall ──
+- name: Install firewalld
+  dnf:
+    name: firewalld
+    state: present
+
+- name: Deploy firewalld public zone
+  template:
+    src: firewalld-public.xml.j2
+    dest: /etc/firewalld/zones/public.xml
+  notify: reload firewalld
+
+- name: Enable and start firewalld
+  systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+# ── Backups ──
+- name: Install NFS utils and cronie
+  dnf:
+    name:
+      - nfs-utils
+      - cronie
+    state: present
+
+- name: Mount NFS backup share
+  mount:
+    path: /mnt/backups
+    src: "192.168.56.50:/export/backups"
+    fstype: nfs
+    opts: _netdev,defaults
+    state: mounted
+
+- name: Daily config backup cron
+  cron:
+    name: backup-configs
+    minute: "0"
+    hour: "3"
+    user: root
+    job: >-
+      mkdir -p /mnt/backups/configs/lb-node
+      && rsync -a /etc/ /mnt/backups/configs/lb-node/
+
+- name: Enable crond
+  systemd:
+    name: crond
+    enabled: true
+    state: started
