@@ -9,16 +9,23 @@ Vagrant.configure("2") do |config|
   config.vm.box = "fedora/42-cloud-base"
   config.vm.box_check_update = false
 
-  config.vm.define "lb" do |lb|
-    lb.vm.hostname = "lb-node"
-    lb.vm.disk :disk, size: "10GB", primary: true
-    lb.vm.network "private_network", ip: "192.168.56.10"
-    lb.vm.provider "virtualbox" do |vb|
+  # Provisioning order: nfs → idp → lb → bastions → target
+  # Storage-node first (NFS exports + RAID1), then IdP (LDAP/Keycloak),
+  # then everything else that depends on them. Cattle, not pets —
+  # destroy and recreate any VM from scratch with `vagrant destroy <vm> && vagrant up <vm>`.
+
+  config.vm.define "nfs" do |nfs|
+    nfs.vm.hostname = "storage-node"
+    nfs.vm.disk :disk, size: "10GB", primary: true
+    nfs.vm.disk :disk, size: "25GB", name: "storage_raid_1"
+    nfs.vm.disk :disk, size: "25GB", name: "storage_raid_2"
+    nfs.vm.network "private_network", ip: "192.168.56.50"
+    nfs.vm.provider "virtualbox" do |vb|
       vb.memory = "1024"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    lb.vm.provision "shell", path: "scripts/lb.sh"
+    nfs.vm.provision "shell", path: "scripts/nfs.sh"
   end
   config.vm.define "idp" do |idp|
     idp.vm.hostname = "idp-node"
@@ -32,18 +39,16 @@ Vagrant.configure("2") do |config|
     end
     idp.vm.provision "shell", path: "scripts/idp.sh"
   end
-  config.vm.define "nfs" do |nfs|
-    nfs.vm.hostname = "storage-node"
-    nfs.vm.disk :disk, size: "10GB", primary: true
-    nfs.vm.disk :disk, size: "25GB", name: "storage_raid_1"
-    nfs.vm.disk :disk, size: "25GB", name: "storage_raid_2"
-    nfs.vm.network "private_network", ip: "192.168.56.50"
-    nfs.vm.provider "virtualbox" do |vb|
+  config.vm.define "lb" do |lb|
+    lb.vm.hostname = "lb-node"
+    lb.vm.disk :disk, size: "10GB", primary: true
+    lb.vm.network "private_network", ip: "192.168.56.10"
+    lb.vm.provider "virtualbox" do |vb|
       vb.memory = "1024"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
-    nfs.vm.provision "shell", path: "scripts/nfs.sh"
+    lb.vm.provision "shell", path: "scripts/lb.sh"
   end
   config.vm.define "bastion1" do |bastion1|
     bastion1.vm.hostname = "bastion-01"

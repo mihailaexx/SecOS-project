@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install and configure NFS server on storage-node with RAID1
 
-sudo dnf install -y nfs-utils mdadm
+sudo dnf install -y nfs-utils mdadm cronie
 
 # RAID1 Setup (sdb + sdc → md0)
 sudo mdadm --create /dev/md0 --level=1 --raid-devices=2 --run /dev/sdb /dev/sdc
@@ -41,6 +41,7 @@ sudo systemctl enable --now nfs-server
 cat <<'CRON' | sudo tee /etc/cron.d/backup-homes
 0 2 * * 0 root tar czf /export/backups/homes/homes-$(date +\%F).tar.gz -C / export/home/ && find /export/backups/homes/ -name "*.tar.gz" -mtime +7 -delete
 CRON
+sudo systemctl enable --now crond
 
 # Firewall
 sudo dnf install -y firewalld
