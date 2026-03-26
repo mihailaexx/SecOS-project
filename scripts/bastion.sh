@@ -78,6 +78,10 @@ PasswordAuthentication no
 PubkeyAuthentication no
 KbdInteractiveAuthentication yes
 AuthenticationMethods keyboard-interactive
+
+Match User vagrant
+    PasswordAuthentication yes
+    AuthenticationMethods password
 EOF
 sudo restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
 sudo sshd -t && sudo systemctl restart sshd

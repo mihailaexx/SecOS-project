@@ -10,6 +10,32 @@
       - cronie
     state: present
 
+# ── SSHD config (deploy FIRST to keep vagrant auth alive through authselect) ──
+- name: Deploy sshd bastion auth drop-in
+  template:
+    src: 40-bastion-auth.conf.j2
+    dest: /etc/ssh/sshd_config.d/40-bastion-auth.conf
+  register: sshd_dropin
+
+- name: Fix SELinux context on sshd drop-in
+  command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
+  changed_when: false
+
+- name: Validate sshd config
+  command: sshd -t
+  changed_when: false
+  when: sshd_dropin.changed
+
+- name: Restart sshd to activate vagrant auth early
+  systemd:
+    name: sshd
+    state: restarted
+  when: sshd_dropin.changed
+
+- name: Reset SSH connection after sshd restart
+  meta: reset_connection
+  when: sshd_dropin.changed
+
 # ── AutoFS for NFS home directories ──
 - name: Deploy autofs master config
   copy:
@@ -47,6 +73,16 @@
   command: authselect select sssd with-mkhomedir --force
   changed_when: false
 
+# Deploy PAM sshd config immediately after authselect (before connection drops)
+- name: Deploy PAM sshd config
+  template:
+    src: sshd-pam.j2
+    dest: /etc/pam.d/sshd
+  notify: restart sshd
+
+- name: Reset SSH connection after PAM changes
+  meta: reset_connection
+
 - name: Enable and start oddjobd
   systemd:
     name: oddjobd
@@ -69,23 +105,6 @@
   template:
     src: pam-keycloak-oidc.tml.j2
     dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
-
-# ── PAM stack for sshd ──
-- name: Deploy PAM sshd config
-  template:
-    src: sshd-pam.j2
-    dest: /etc/pam.d/sshd
-
-# ── SSHD config ──
-- name: Deploy sshd bastion auth drop-in
-  template:
-    src: 40-bastion-auth.conf.j2
-    dest: /etc/ssh/sshd_config.d/40-bastion-auth.conf
-  notify: restart sshd
-
-- name: Fix SELinux context on sshd drop-in
-  command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
-  changed_when: false
 
 # ── Groups ──
 - name: Create groups
@@ -135,6 +154,13 @@
     dest: /etc/sudoers.d/bastion-admins
     mode: "0440"
     validate: "visudo -cf %s"
+
+# Flush pending sshd restart handler before firewall changes
+- name: Flush handlers
+  meta: flush_handlers
+
+- name: Reset SSH connection after sshd restart
+  meta: reset_connection
 
 # ── Firewall ──
 - name: Install firewalld

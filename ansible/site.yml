@@ -11,6 +11,82 @@
   roles:
     - idp
 
+# lb-node bootstrap: port 22 → sshd on 2222 → HAProxy takes 22
+# On fresh VM: connects on 22, reconfigures sshd, switches to 2222
+# On re-run: port 2222 already open, bootstrap is skipped
+- name: Bootstrap lb-node SSH management port
+  hosts: lb
+  gather_facts: false
+  tasks:
+    - name: Check if management port 2222 is already open
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 2222
+        timeout: 3
+      delegate_to: localhost
+      become: false
+      register: mgmt_port_check
+      ignore_errors: true
+
+    - name: Configure sshd management port (first run only)
+      when: mgmt_port_check is failed
+      vars:
+        ansible_port: 22
+      block:
+        - name: Gather facts
+          setup:
+
+        - name: Get NAT interface IP
+          shell: ip -4 addr show enp0s3 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
+          register: eth0_ip
+          changed_when: false
+
+        - name: Remove existing ListenAddress lines
+          lineinfile:
+            path: /etc/ssh/sshd_config
+            regexp: '^#?ListenAddress'
+            state: absent
+
+        - name: Bind sshd to NAT:22 + management:2222
+          blockinfile:
+            path: /etc/ssh/sshd_config
+            marker: "# {mark} MANAGED BY ANSIBLE - SSHD LISTEN"
+            block: |
+              ListenAddress {{ eth0_ip.stdout }}:22
+              ListenAddress 127.0.0.1:22
+              ListenAddress 0.0.0.0:2222
+
+        - name: Install SELinux management tools
+          dnf:
+            name:
+              - python3-libselinux
+              - python3-libsemanage
+              - policycoreutils-python-utils
+            state: present
+
+        - name: Allow sshd to bind to port 2222 (SELinux)
+          command: semanage port -a -t ssh_port_t -p tcp 2222
+          register: semanage_result
+          failed_when: semanage_result.rc != 0 and 'already defined' not in semanage_result.stderr
+          changed_when: semanage_result.rc == 0
+
+        - name: Validate sshd config before restart
+          command: sshd -t
+          changed_when: false
+
+        - name: Restart sshd to activate management port (async — port 22 will drop)
+          shell: sleep 2 && systemctl restart sshd
+          async: 10
+          poll: 0
+
+    - name: Wait for management port 2222
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 2222
+        timeout: 30
+      delegate_to: localhost
+      become: false
+
 - name: Configure lb-node (HAProxy)
   hosts: lb
   roles:

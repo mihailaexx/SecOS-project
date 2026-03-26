@@ -5,6 +5,7 @@
       - nfs-utils
       - mdadm
       - cronie
+      - xfsprogs
     state: present
 
 - name: Create RAID1 array from sdb + sdc

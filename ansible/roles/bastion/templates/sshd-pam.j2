@@ -1,4 +1,7 @@
 #%PAM-1.0
+# Local users (e.g. vagrant) authenticate via pam_unix; if it succeeds, auth is done
+auth       sufficient                  pam_unix.so nullok
+# Non-local users authenticate via Keycloak OIDC
 auth       [success=1 default=ignore]  pam_exec.so expose_authtok log=/var/log/pam-keycloak-oidc.log /opt/pam-keycloak-oidc/pam-keycloak-oidc
 auth       requisite                   pam_deny.so
 auth       required                    pam_permit.so

@@ -1,0 +1,339 @@
+---
+# ── Storage node tests ──
+- name: Test storage-node
+  hosts: storage
+  tasks:
+    - name: Check RAID1 array
+      command: cat /proc/mdstat
+      register: mdstat
+      changed_when: false
+
+    - name: Verify RAID1 is active
+      assert:
+        that: "'md0 : active raid1' in mdstat.stdout"
+        fail_msg: "RAID1 array md0 not active"
+
+    - name: Check /export/home mount
+      command: findmnt -n -o FSTYPE /export/home
+      register: home_mount
+      changed_when: false
+
+    - name: Verify /export/home is XFS
+      assert:
+        that: "home_mount.stdout | trim == 'xfs'"
+        fail_msg: "/export/home is not XFS"
+
+    - name: Check NFS exports
+      command: exportfs -v
+      register: exports
+      changed_when: false
+
+    - name: Verify NFS exports configured
+      assert:
+        that: "'/export/home' in exports.stdout"
+        fail_msg: "NFS /export/home not exported"
+
+    - name: Check NFS service running
+      systemd:
+        name: nfs-server
+        state: started
+      check_mode: true
+      register: nfs_svc
+
+    - name: Verify NFS service
+      assert:
+        that: "nfs_svc.status.ActiveState == 'active'"
+        fail_msg: "NFS server not running"
+
+    - name: Check crond running
+      systemd:
+        name: crond
+        state: started
+      check_mode: true
+      register: crond_svc
+
+    - name: Verify crond
+      assert:
+        that: "crond_svc.status.ActiveState == 'active'"
+        fail_msg: "crond not running"
+
+    - name: Check backup directories exist
+      stat:
+        path: "{{ item }}"
+      loop:
+        - /export/backups/postgres
+        - /export/backups/ldap
+        - /export/backups/keycloak
+        - /export/backups/configs
+      register: backup_dirs
+
+    - name: Verify backup directories
+      assert:
+        that: "item.stat.exists"
+        fail_msg: "{{ item.item }} missing"
+      loop: "{{ backup_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+# ── IDP node tests ──
+- name: Test idp-node
+  hosts: idp
+  tasks:
+    - name: Check slapd running
+      systemd:
+        name: slapd
+        state: started
+      check_mode: true
+      register: slapd_svc
+
+    - name: Verify slapd
+      assert:
+        that: "slapd_svc.status.ActiveState == 'active'"
+        fail_msg: "slapd not running"
+
+    - name: Test LDAP search
+      command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(uid=m.bulushev)" uid
+      register: ldap_search
+      changed_when: false
+
+    - name: Verify LDAP user exists
+      assert:
+        that: "'uid: m.bulushev' in ldap_search.stdout"
+        fail_msg: "LDAP user m.bulushev not found"
+
+    - name: Check Keycloak running
+      systemd:
+        name: keycloak
+        state: started
+      check_mode: true
+      register: kc_svc
+
+    - name: Verify Keycloak
+      assert:
+        that: "kc_svc.status.ActiveState == 'active'"
+        fail_msg: "Keycloak not running"
+
+    - name: Test Keycloak HTTP
+      uri:
+        url: http://localhost:8080/realms/bastion/.well-known/openid-configuration
+        return_content: false
+        status_code: 200
+      register: kc_http
+
+    - name: Verify Keycloak realm
+      assert:
+        that: "kc_http.status == 200"
+        fail_msg: "Keycloak bastion realm not responding"
+
+    - name: Check NFS backup mount
+      command: findmnt -n -o FSTYPE /mnt/backups
+      register: backup_mount
+      changed_when: false
+
+    - name: Verify NFS backup mount
+      assert:
+        that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
+        fail_msg: "/mnt/backups not NFS-mounted"
+
+# ── LB node tests ──
+- name: Test lb-node
+  hosts: lb
+  tasks:
+    - name: Check HAProxy running
+      systemd:
+        name: haproxy
+        state: started
+      check_mode: true
+      register: haproxy_svc
+
+    - name: Verify HAProxy
+      assert:
+        that: "haproxy_svc.status.ActiveState == 'active'"
+        fail_msg: "HAProxy not running"
+
+    - name: Check HAProxy listens on port 22
+      command: ss -tlnp
+      register: ss_out
+      changed_when: false
+
+    - name: Verify HAProxy on port 22
+      assert:
+        that: "':22 ' in ss_out.stdout"
+        fail_msg: "Nothing listening on port 22"
+
+    - name: Check sshd on port 2222
+      assert:
+        that: "':2222 ' in ss_out.stdout"
+        fail_msg: "sshd not listening on management port 2222"
+
+    - name: Check firewalld running
+      systemd:
+        name: firewalld
+        state: started
+      check_mode: true
+      register: fw_svc
+
+    - name: Verify firewalld
+      assert:
+        that: "fw_svc.status.ActiveState == 'active'"
+        fail_msg: "firewalld not running"
+
+    - name: Check NFS backup mount
+      command: findmnt -n -o FSTYPE /mnt/backups
+      register: backup_mount
+      changed_when: false
+
+    - name: Verify NFS backup mount
+      assert:
+        that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
+        fail_msg: "/mnt/backups not NFS-mounted"
+
+# ── Bastion node tests ──
+- name: Test bastion nodes
+  hosts: bastions
+  tasks:
+    - name: Check SSSD running
+      systemd:
+        name: sssd
+        state: started
+      check_mode: true
+      register: sssd_svc
+
+    - name: Verify SSSD
+      assert:
+        that: "sssd_svc.status.ActiveState == 'active'"
+        fail_msg: "SSSD not running"
+
+    - name: Check autofs running
+      systemd:
+        name: autofs
+        state: started
+      check_mode: true
+      register: autofs_svc
+
+    - name: Verify autofs
+      assert:
+        that: "autofs_svc.status.ActiveState == 'active'"
+        fail_msg: "autofs not running"
+
+    - name: Check sshd running
+      systemd:
+        name: sshd
+        state: started
+      check_mode: true
+      register: sshd_svc
+
+    - name: Verify sshd
+      assert:
+        that: "sshd_svc.status.ActiveState == 'active'"
+        fail_msg: "sshd not running"
+
+    - name: Check sshd drop-in exists
+      stat:
+        path: /etc/ssh/sshd_config.d/40-bastion-auth.conf
+      register: sshd_dropin
+
+    - name: Verify sshd drop-in
+      assert:
+        that: "sshd_dropin.stat.exists"
+        fail_msg: "sshd bastion auth drop-in missing"
+
+    - name: Check pam-keycloak-oidc binary
+      stat:
+        path: /opt/pam-keycloak-oidc/pam-keycloak-oidc
+      register: pam_kc
+
+    - name: Verify pam-keycloak-oidc
+      assert:
+        that: "pam_kc.stat.exists and pam_kc.stat.mode == '0755'"
+        fail_msg: "pam-keycloak-oidc binary missing or wrong perms"
+
+    - name: Check LDAP user resolution via SSSD
+      command: getent passwd m.bulushev
+      register: getent_user
+      changed_when: false
+
+    - name: Verify LDAP user resolves
+      assert:
+        that: "'m.bulushev' in getent_user.stdout"
+        fail_msg: "SSSD can't resolve m.bulushev from LDAP"
+
+    - name: Check firewalld running
+      systemd:
+        name: firewalld
+        state: started
+      check_mode: true
+      register: fw_svc
+
+    - name: Verify firewalld
+      assert:
+        that: "fw_svc.status.ActiveState == 'active'"
+        fail_msg: "firewalld not running"
+
+    - name: Check NFS backup mount
+      command: findmnt -n -o FSTYPE /mnt/backups
+      register: backup_mount
+      changed_when: false
+
+    - name: Verify NFS backup mount
+      assert:
+        that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
+        fail_msg: "/mnt/backups not NFS-mounted"
+
+# ── Target server tests ──
+- name: Test test-server
+  hosts: target
+  tasks:
+    - name: Check dedicated disk mount
+      command: findmnt -n -o FSTYPE /var/lib/pgsql
+      register: pg_mount
+      changed_when: false
+
+    - name: Verify PostgreSQL data disk
+      assert:
+        that: "pg_mount.stdout | trim == 'xfs'"
+        fail_msg: "/var/lib/pgsql not XFS-mounted"
+
+    - name: Check PostgreSQL running
+      systemd:
+        name: postgresql-16
+        state: started
+      check_mode: true
+      register: pg_svc
+
+    - name: Verify PostgreSQL
+      assert:
+        that: "pg_svc.status.ActiveState == 'active'"
+        fail_msg: "PostgreSQL 16 not running"
+
+    - name: Check dba1 role exists
+      shell: sudo -u postgres /usr/pgsql-16/bin/psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='dba1'"
+      register: dba_role
+      changed_when: false
+
+    - name: Verify dba1 role
+      assert:
+        that: "'1' in dba_role.stdout"
+        fail_msg: "PostgreSQL dba1 role missing"
+
+    - name: Check firewalld running
+      systemd:
+        name: firewalld
+        state: started
+      check_mode: true
+      register: fw_svc
+
+    - name: Verify firewalld
+      assert:
+        that: "fw_svc.status.ActiveState == 'active'"
+        fail_msg: "firewalld not running"
+
+    - name: Check NFS backup mount
+      command: findmnt -n -o FSTYPE /mnt/backups
+      register: backup_mount
+      changed_when: false
+
+    - name: Verify NFS backup mount
+      assert:
+        that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
+        fail_msg: "/mnt/backups not NFS-mounted"

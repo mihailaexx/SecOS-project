@@ -10,25 +10,12 @@
     dest: /etc/haproxy/haproxy.cfg
   notify: restart haproxy
 
-- name: Get NAT interface IP
-  shell: ip -4 addr show enp0s3 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
-  register: eth0_ip
-  changed_when: false
-
-- name: Remove existing ListenAddress lines from sshd_config
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: '^#?ListenAddress'
-    state: absent
-
-- name: Bind sshd to NAT interface only
-  blockinfile:
-    path: /etc/ssh/sshd_config
-    marker: "# {mark} MANAGED BY ANSIBLE - SSHD LISTEN"
-    block: |
-      ListenAddress {{ eth0_ip.stdout }}
-      ListenAddress 127.0.0.1
-  notify: restart sshd
+- name: Install Python SELinux bindings
+  dnf:
+    name:
+      - python3-libselinux
+      - python3-libsemanage
+    state: present
 
 - name: Allow HAProxy to connect to any port (SELinux)
   seboolean:

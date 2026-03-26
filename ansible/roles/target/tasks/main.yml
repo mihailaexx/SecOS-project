@@ -1,5 +1,10 @@
 ---
 # ── Dedicated disk for PostgreSQL data ──
+- name: Install xfsprogs
+  dnf:
+    name: xfsprogs
+    state: present
+
 - name: Format PostgreSQL data disk with XFS
   filesystem:
     fstype: xfs
@@ -18,10 +23,6 @@
     name: https://download.postgresql.org/pub/repos/yum/reporpms/F-42-x86_64/pgdg-fedora-repo-latest.noarch.rpm
     state: present
     disable_gpg_check: true
-
-- name: Disable built-in postgresql module
-  command: dnf -qy module disable postgresql
-  changed_when: false
 
 - name: Install PostgreSQL 16
   dnf:

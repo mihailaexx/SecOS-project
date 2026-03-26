@@ -20,7 +20,7 @@
     - /etc/openldap/schema/inetorgperson.ldif
     - /etc/openldap/schema/nis.ldif
   register: schema_result
-  failed_when: schema_result.rc != 0 and 'already exists' not in schema_result.stderr
+  failed_when: schema_result.rc != 0 and 'Duplicate' not in schema_result.stderr and 'already exists' not in schema_result.stderr
   changed_when: schema_result.rc == 0
 
 - name: Create LDAP data directory
