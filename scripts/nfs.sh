@@ -3,7 +3,7 @@
 
 sudo dnf install -y nfs-utils mdadm
 
-# ── RAID1 Setup (sdb + sdc → md0) ──
+# RAID1 Setup (sdb + sdc → md0)
 sudo mdadm --create /dev/md0 --level=1 --raid-devices=2 --run /dev/sdb /dev/sdc
 sudo mkfs.xfs /dev/md0
 
@@ -25,10 +25,10 @@ sudo chown 1001:2000 /export/home/m.bulushev
 sudo chown 1002:2001 /export/home/admin1
 sudo chown 1003:2002 /export/home/dba1
 
-# ── Backup directories (on RAID1 array) ──
+# Backup directories (on RAID1 array)
 sudo mkdir -p /export/backups/{postgres,ldap,keycloak,configs,homes}
 
-# ── NFS Exports ──
+# NFS Exports
 cat <<'EOF' | sudo tee /etc/exports
 /export/home 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash)
 /export/backups 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash)
@@ -37,7 +37,7 @@ EOF
 sudo exportfs -rav
 sudo systemctl enable --now nfs-server
 
-# ── Weekly home backup cron (Sunday 2:00 AM) ──
+# Weekly home backup cron
 cat <<'CRON' | sudo tee /etc/cron.d/backup-homes
 0 2 * * 0 root tar czf /export/backups/homes/homes-$(date +\%F).tar.gz -C / export/home/ && find /export/backups/homes/ -name "*.tar.gz" -mtime +7 -delete
 CRON

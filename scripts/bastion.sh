@@ -126,12 +126,12 @@ EOF
 
 sudo systemctl enable --now firewalld
 
-# ── NFS mount for backups ──
+# NFS mount for backups
 sudo mkdir -p /mnt/backups
 echo '192.168.56.50:/export/backups /mnt/backups nfs defaults 0 0' | sudo tee -a /etc/fstab
 sudo mount /mnt/backups
 
-# Daily config backup (3:00 AM)
+# Daily config backup
 cat <<'CRON' | sudo tee /etc/cron.d/backup-configs
 0 3 * * * root mkdir -p /mnt/backups/configs/$(hostname) && rsync -a /etc/ /mnt/backups/configs/$(hostname)/
 CRON
