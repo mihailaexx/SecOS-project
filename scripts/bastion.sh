@@ -71,13 +71,14 @@ session    required                    pam_unix.so
 session    optional                    pam_mkhomedir.so
 EOF
 
-# SSHD config for keyboard-interactive auth
-sudo sed -i 's/^#\?UsePAM.*/UsePAM yes/' /etc/ssh/sshd_config
-sudo sed -i 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config
-sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config
-grep -q '^AuthenticationMethods' /etc/ssh/sshd_config || echo 'AuthenticationMethods keyboard-interactive' | sudo tee -a /etc/ssh/sshd_config
-grep -q '^KbdInteractiveAuthentication' /etc/ssh/sshd_config || echo 'KbdInteractiveAuthentication yes' | sudo tee -a /etc/ssh/sshd_config
+# SSHD config for keyboard-interactive auth (drop-in overrides RedHat defaults)
+cat <<'EOF' | sudo tee /etc/ssh/sshd_config.d/60-bastion-auth.conf
+UsePAM yes
+PasswordAuthentication no
+PubkeyAuthentication no
+KbdInteractiveAuthentication yes
+AuthenticationMethods keyboard-interactive
+EOF
 sudo systemctl restart sshd
 
 # Groups
@@ -124,3 +125,13 @@ cat <<'EOF' | sudo tee /etc/firewalld/zones/public.xml
 EOF
 
 sudo systemctl enable --now firewalld
+
+# ── NFS mount for backups ──
+sudo mkdir -p /mnt/backups
+echo '192.168.56.50:/export/backups /mnt/backups nfs defaults 0 0' | sudo tee -a /etc/fstab
+sudo mount /mnt/backups
+
+# Daily config backup (3:00 AM)
+cat <<'CRON' | sudo tee /etc/cron.d/backup-configs
+0 3 * * * root mkdir -p /mnt/backups/configs/$(hostname) && rsync -a /etc/ /mnt/backups/configs/$(hostname)/
+CRON

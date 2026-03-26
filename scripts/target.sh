@@ -1,9 +1,18 @@
 #!/bin/bash
-# Install and configure PostgreSQL on test-server
+# Install and configure PostgreSQL on test-server with dedicated data disk
 
+# ── Dedicated disk for PostgreSQL data (sdb → /var/lib/pgsql) ──
+sudo mkfs.xfs /dev/sdb
+sudo mkdir -p /var/lib/pgsql
+sudo mount /dev/sdb /var/lib/pgsql
+echo '/dev/sdb /var/lib/pgsql xfs defaults 0 0' | sudo tee -a /etc/fstab
+
+# ── PostgreSQL ──
 sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/F-42-x86_64/pgdg-fedora-repo-latest.noarch.rpm
 sudo dnf -qy module disable postgresql
 sudo dnf install -y postgresql16-server postgresql16
+
+sudo chown postgres:postgres /var/lib/pgsql
 sudo /usr/pgsql-16/bin/postgresql-16-setup initdb
 
 cat <<'EOF' | sudo tee /var/lib/pgsql/16/data/pg_hba.conf
@@ -22,6 +31,23 @@ cat <<'EOF' | sudo tee /etc/sudoers.d/dba
 %dba ALL=(root) /usr/bin/systemctl restart postgresql-16
 EOF
 sudo chmod 440 /etc/sudoers.d/dba
+
+# ── NFS mount for backups ──
+sudo dnf install -y nfs-utils
+sudo mkdir -p /mnt/backups
+echo '192.168.56.50:/export/backups /mnt/backups nfs defaults 0 0' | sudo tee -a /etc/fstab
+sudo mount /mnt/backups
+
+# ── Backup crons ──
+# Daily PostgreSQL backup (2:00 AM)
+cat <<'CRON' | sudo tee /etc/cron.d/backup-postgres
+0 2 * * * postgres /usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-$(date +\%F).sql.gz && find /mnt/backups/postgres/ -name "*.sql.gz" -mtime +7 -delete
+CRON
+
+# Daily config backup (3:00 AM)
+cat <<'CRON' | sudo tee /etc/cron.d/backup-configs
+0 3 * * * root mkdir -p /mnt/backups/configs/test-server && rsync -a /etc/ /mnt/backups/configs/test-server/
+CRON
 
 # Firewall
 sudo dnf install -y firewalld

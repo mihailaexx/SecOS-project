@@ -282,3 +282,25 @@ cat <<'EOF' | sudo tee /etc/firewalld/zones/public.xml
 EOF
 
 sudo systemctl enable --now firewalld
+
+# ── NFS mount for backups ──
+sudo dnf install -y nfs-utils
+sudo mkdir -p /mnt/backups
+echo '192.168.56.50:/export/backups /mnt/backups nfs defaults 0 0' | sudo tee -a /etc/fstab
+sudo mount /mnt/backups
+
+# ── Backup crons ──
+# Daily LDAP backup (2:00 AM)
+cat <<'CRON' | sudo tee /etc/cron.d/backup-ldap
+0 2 * * * root slapcat | gzip > /mnt/backups/ldap/ldap-$(date +\%F).ldif.gz && find /mnt/backups/ldap/ -name "*.ldif.gz" -mtime +7 -delete
+CRON
+
+# Daily Keycloak realm export (2:30 AM)
+cat <<'CRON' | sudo tee /etc/cron.d/backup-keycloak
+30 2 * * * root /opt/keycloak/bin/kc.sh export --dir /mnt/backups/keycloak/ --realm bastion && find /mnt/backups/keycloak/ -name "*.json" -mtime +7 -delete
+CRON
+
+# Daily config backup (3:00 AM)
+cat <<'CRON' | sudo tee /etc/cron.d/backup-configs
+0 3 * * * root mkdir -p /mnt/backups/configs/idp-node && rsync -a /etc/ /mnt/backups/configs/idp-node/
+CRON
