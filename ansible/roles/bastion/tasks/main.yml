@@ -8,6 +8,8 @@
       - oddjob-mkhomedir
       - autofs
       - cronie
+      - policycoreutils-python-utils
+      - checkpolicy
     state: present
 
 # ── SSHD config (deploy FIRST to keep vagrant auth alive through authselect) ──
@@ -105,6 +107,24 @@
   template:
     src: pam-keycloak-oidc.tml.j2
     dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
+
+# ── SELinux policy for pam-keycloak-oidc ──
+- name: Copy SELinux policy source
+  copy:
+    src: pam_keycloak_oidc.te
+    dest: /tmp/pam_keycloak_oidc.te
+
+- name: Compile SELinux policy module
+  command: checkmodule -M -m -o /tmp/pam_keycloak_oidc.mod /tmp/pam_keycloak_oidc.te
+  changed_when: false
+
+- name: Package SELinux policy module
+  command: semodule_package -o /tmp/pam_keycloak_oidc.pp -m /tmp/pam_keycloak_oidc.mod
+  changed_when: false
+
+- name: Install SELinux policy module
+  command: semodule -i /tmp/pam_keycloak_oidc.pp
+  changed_when: false
 
 # ── Groups ──
 - name: Create groups

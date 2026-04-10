@@ -1,0 +1,15 @@
+module pam_keycloak_oidc 1.0;
+
+require {
+    type sshd_t;
+    type var_log_t;
+    type http_cache_port_t;
+    class file { create open write append getattr };
+    class tcp_socket name_connect;
+}
+
+# Allow sshd (pam_exec) to write pam-keycloak-oidc log
+allow sshd_t var_log_t:file { create open write append getattr };
+
+# Allow sshd (pam-keycloak-oidc) to connect to Keycloak on port 8080
+allow sshd_t http_cache_port_t:tcp_socket name_connect;
