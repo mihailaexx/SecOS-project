@@ -1,0 +1,46 @@
+---
+# Central Keycloak + OpenLDAP events from idp-node.
+# Usage:
+#   ansible-playbook scripts/logs/logs-idp.yml \
+#     [-e pattern='SRCH'] [-e since='1 day ago']
+#
+#   pattern — optional grep pattern (passed to journalctl -g)
+#   since   — time window (default: "1 day ago")
+
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Define log collector host
+      add_host:
+        name: log-collector
+        groups: log_query
+        ansible_host: 192.168.56.50
+        ansible_user: vagrant
+        ansible_password: vagrant
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+- hosts: log_query
+  gather_facts: false
+  vars:
+    pattern: ""
+    since: "1 day ago"
+  tasks:
+    - name: Query central Keycloak + OpenLDAP log
+      shell: |
+        journalctl \
+          -D /var/log/journal/remote \
+          -S {{ since | quote }} \
+          -o short-iso \
+          --no-pager \
+          -u keycloak.service \
+          -u slapd.service \
+          {% if pattern %}-g {{ pattern | quote }}{% endif %}
+      register: result
+      changed_when: false
+      failed_when: false
+
+    - name: Display results
+      debug:
+        msg: "{{ result.stdout_lines }}"

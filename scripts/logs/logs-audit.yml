@@ -1,0 +1,52 @@
+---
+# Central auditd events across the fleet, filtered by audit key.
+# Usage:
+#   ansible-playbook scripts/logs/logs-audit.yml \
+#     -e key=identity [-e host=bastion-01] [-e since='1 day ago']
+#
+#   key   — auditd rule key (REQUIRED): identity, privilege, sshd, pam, ...
+#   host  — optional exact hostname: bastion-01, idp-node, lb-node, test-server
+#   since — time window (default: "1 day ago")
+
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Validate key argument
+      assert:
+        that: key | default('') | length > 0
+        fail_msg: "Required: -e key=<audit-key>"
+
+    - name: Define log collector host
+      add_host:
+        name: log-collector
+        groups: log_query
+        ansible_host: 192.168.56.50
+        ansible_user: vagrant
+        ansible_password: vagrant
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+- hosts: log_query
+  gather_facts: false
+  vars:
+    host: ""
+    since: "1 day ago"
+  tasks:
+    - name: Query central audit log
+      shell: |
+        journalctl \
+          -D /var/log/journal/remote \
+          -S {{ since | quote }} \
+          -o short-iso \
+          --no-pager \
+          -g {{ ('key="?' + key + '"?') | quote }} \
+          SYSLOG_IDENTIFIER=audisp-syslog \
+          {% if host %}_HOSTNAME={{ host | quote }}{% endif %}
+      register: result
+      changed_when: false
+      failed_when: false
+
+    - name: Display results
+      debug:
+        msg: "{{ result.stdout_lines }}"
