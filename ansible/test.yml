@@ -75,6 +75,114 @@
       loop_control:
         label: "{{ item.item }}"
 
+    - name: Check auditd running
+      systemd:
+        name: auditd
+        state: started
+      check_mode: true
+      register: auditd_svc
+
+    - name: Verify auditd
+      assert:
+        that: "auditd_svc.status.ActiveState == 'active'"
+        fail_msg: "auditd not running"
+
+    - name: Check kernel audit=1 parameter
+      command: grep -o audit=1 /proc/cmdline
+      register: audit_cmdline
+      changed_when: false
+      failed_when: false
+
+    - name: Verify audit=1 in /proc/cmdline
+      assert:
+        that: "audit_cmdline.stdout == 'audit=1'"
+        fail_msg: "kernel boot arg audit=1 missing — file watches inert until reboot"
+
+    - name: Check journald audit socket masked
+      command: systemctl is-enabled systemd-journald-audit.socket
+      register: jas_state
+      changed_when: false
+      failed_when: false
+
+    - name: Verify journald audit socket masked
+      assert:
+        that: "jas_state.stdout | trim == 'masked'"
+        fail_msg: "systemd-journald-audit.socket not masked — journald may steal kernel audit_pid"
+
+    - name: Check journal-remote socket
+      systemd:
+        name: systemd-journal-remote.socket
+        state: started
+      check_mode: true
+      register: jrs_socket
+
+    - name: Verify journal-remote socket
+      assert:
+        that: "jrs_socket.status.ActiveState == 'active'"
+        fail_msg: "systemd-journal-remote.socket not active"
+
+    - name: Check journal-remote service
+      systemd:
+        name: systemd-journal-remote.service
+        state: started
+      check_mode: true
+      register: jrs_service
+
+    - name: Verify journal-remote service
+      assert:
+        that: "jrs_service.status.ActiveState in ['active', 'activating']"
+        fail_msg: "systemd-journal-remote.service not active"
+
+    - name: Check mdadm detail
+      command: mdadm --detail /dev/md0
+      register: mdadm_detail
+      changed_when: false
+
+    - name: Verify mdadm clean state (2 active, 0 failed)
+      assert:
+        that:
+          - "'State : clean' in mdadm_detail.stdout"
+          - "'Active Devices : 2' in mdadm_detail.stdout"
+          - "'Failed Devices : 0' in mdadm_detail.stdout"
+        fail_msg: "RAID1 not clean"
+
+    - name: Check showmount lists exports
+      command: showmount -e localhost
+      register: showmount_out
+      changed_when: false
+
+    - name: Verify both NFS exports listed
+      assert:
+        that:
+          - "'/export/home' in showmount_out.stdout"
+          - "'/export/backups' in showmount_out.stdout"
+        fail_msg: "NFS exports incomplete"
+
+    - name: Check storage firewall internal-bastion zone
+      command: firewall-cmd --zone=internal-bastion --list-all
+      register: fw_storage
+      changed_when: false
+
+    - name: Verify storage firewall ports (NFS + journal-remote)
+      assert:
+        that:
+          - "'nfs' in fw_storage.stdout"
+          - "'19532/tcp' in fw_storage.stdout"
+        fail_msg: "internal-bastion zone missing nfs service or 19532"
+
+    - name: Check storage root crontab
+      command: crontab -l
+      register: storage_crontab
+      changed_when: false
+      failed_when: false
+
+    - name: Verify storage cron entries (backup-homes + prune-remote-journals)
+      assert:
+        that:
+          - "'backup-homes' in storage_crontab.stdout"
+          - "'prune-remote-journals' in storage_crontab.stdout"
+        fail_msg: "Storage cron entries missing"
+
 # ── IDP node tests ──
 - name: Test idp-node
   hosts: idp
@@ -135,6 +243,115 @@
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
 
+    - name: Check IDP auditd running
+      systemd:
+        name: auditd
+        state: started
+      check_mode: true
+      register: idp_auditd_svc
+
+    - name: Verify IDP auditd
+      assert:
+        that: "idp_auditd_svc.status.ActiveState == 'active'"
+        fail_msg: "auditd not running on idp-node"
+
+    - name: Check IDP kernel audit=1
+      command: grep -o audit=1 /proc/cmdline
+      register: idp_audit_cmdline
+      changed_when: false
+      failed_when: false
+
+    - name: Verify IDP audit=1
+      assert:
+        that: "idp_audit_cmdline.stdout == 'audit=1'"
+        fail_msg: "audit=1 missing on idp-node"
+
+    - name: Check IDP journald audit socket masked
+      command: systemctl is-enabled systemd-journald-audit.socket
+      register: idp_jas_state
+      changed_when: false
+      failed_when: false
+
+    - name: Verify IDP journald audit socket masked
+      assert:
+        that: "idp_jas_state.stdout | trim == 'masked'"
+        fail_msg: "journald-audit.socket not masked on idp-node"
+
+    - name: Check IDP journal-upload running
+      systemd:
+        name: systemd-journal-upload.service
+        state: started
+      check_mode: true
+      register: idp_ju_svc
+
+    - name: Verify IDP journal-upload
+      assert:
+        that: "idp_ju_svc.status.ActiveState == 'active'"
+        fail_msg: "journal-upload not running on idp-node"
+
+    - name: Check IDP firewall (all zones)
+      command: firewall-cmd --list-all-zones
+      register: fw_idp
+      changed_when: false
+
+    - name: Verify IDP firewall (Keycloak 8080 + LDAP 389)
+      assert:
+        that:
+          - "'8080/tcp' in fw_idp.stdout"
+          - "'389/tcp' in fw_idp.stdout or 'ldap' in fw_idp.stdout"
+        fail_msg: "IDP firewall missing 8080 or 389/ldap"
+
+    - name: Check all 3 LDAP users present
+      command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(|(uid=m.bulushev)(uid=admin1)(uid=dba1))" uid
+      register: ldap_users
+      changed_when: false
+
+    - name: Verify all 3 LDAP users
+      assert:
+        that:
+          - "'uid: m.bulushev' in ldap_users.stdout"
+          - "'uid: admin1' in ldap_users.stdout"
+          - "'uid: dba1' in ldap_users.stdout"
+        fail_msg: "Not all 3 LDAP users found"
+
+    - name: Check IDP root crontab
+      command: crontab -l
+      register: idp_crontab
+      changed_when: false
+      failed_when: false
+
+    - name: Verify IDP cron entries (backup-ldap + backup-keycloak + backup-configs)
+      assert:
+        that:
+          - "'backup-ldap' in idp_crontab.stdout"
+          - "'backup-keycloak' in idp_crontab.stdout"
+          - "'backup-configs' in idp_crontab.stdout"
+        fail_msg: "IDP cron entries missing"
+
+    - name: LDAP backup smoke
+      block:
+        - name: Trigger slapcat backup
+          shell: slapcat | gzip > /mnt/backups/ldap/ldap-test-{{ lookup('pipe', 'date +%s') }}.ldif.gz
+          changed_when: false
+
+        - name: Verify slapcat backup is recoverable
+          shell: |
+            f=$(ls -t /mnt/backups/ldap/ldap-test-*.ldif.gz | head -1)
+            test -s "$f" || exit 1
+            gunzip -t "$f" || exit 1
+            gunzip -c "$f" | grep -c '^dn:'
+          register: ldap_dn_count
+          changed_when: false
+
+        - name: Assert LDAP backup contains entries
+          assert:
+            that: "ldap_dn_count.stdout | int >= 4"
+            fail_msg: "LDAP backup has < 4 dn entries (expected admin + 3 users)"
+      always:
+        - name: Cleanup LDAP backup smoke artifact
+          shell: rm -f /mnt/backups/ldap/ldap-test-*.ldif.gz
+          changed_when: false
+
 # ── LB node tests ──
 - name: Test lb-node
   hosts: lb
@@ -187,6 +404,79 @@
       assert:
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
+
+    - name: Check LB auditd running
+      systemd:
+        name: auditd
+        state: started
+      check_mode: true
+      register: lb_auditd_svc
+
+    - name: Verify LB auditd
+      assert:
+        that: "lb_auditd_svc.status.ActiveState == 'active'"
+        fail_msg: "auditd not running on lb-node"
+
+    - name: Check LB kernel audit=1
+      command: grep -o audit=1 /proc/cmdline
+      register: lb_audit_cmdline
+      changed_when: false
+      failed_when: false
+
+    - name: Verify LB audit=1
+      assert:
+        that: "lb_audit_cmdline.stdout == 'audit=1'"
+        fail_msg: "audit=1 missing on lb-node"
+
+    - name: Check LB journald audit socket masked
+      command: systemctl is-enabled systemd-journald-audit.socket
+      register: lb_jas_state
+      changed_when: false
+      failed_when: false
+
+    - name: Verify LB journald audit socket masked
+      assert:
+        that: "lb_jas_state.stdout | trim == 'masked'"
+        fail_msg: "journald-audit.socket not masked on lb-node"
+
+    - name: Check LB journal-upload running
+      systemd:
+        name: systemd-journal-upload.service
+        state: started
+      check_mode: true
+      register: lb_ju_svc
+
+    - name: Verify LB journal-upload
+      assert:
+        that: "lb_ju_svc.status.ActiveState == 'active'"
+        fail_msg: "journal-upload not running on lb-node"
+
+    - name: Check LB firewall
+      command: firewall-cmd --list-all
+      register: fw_lb
+      changed_when: false
+
+    - name: Verify LB firewall (HAProxy 22 + mgmt 2222)
+      assert:
+        that:
+          - "'22/tcp' in fw_lb.stdout or 'ssh' in fw_lb.stdout"
+          - "'2222/tcp' in fw_lb.stdout"
+        fail_msg: "LB firewall missing 22 or 2222"
+
+    - name: Check LB root crontab
+      command: crontab -l
+      register: lb_crontab
+      changed_when: false
+      failed_when: false
+
+    - name: Verify LB cron entries (backup-configs)
+      assert:
+        that: "'backup-configs' in lb_crontab.stdout"
+        fail_msg: "LB backup-configs cron missing"
+
+    - name: Validate HAProxy config
+      command: haproxy -c -f /etc/haproxy/haproxy.cfg
+      changed_when: false
 
 # ── Bastion node tests ──
 - name: Test bastion nodes
@@ -280,6 +570,175 @@
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
 
+    - name: Check bastion auditd running
+      systemd:
+        name: auditd
+        state: started
+      check_mode: true
+      register: b_auditd_svc
+
+    - name: Verify bastion auditd
+      assert:
+        that: "b_auditd_svc.status.ActiveState == 'active'"
+        fail_msg: "auditd not running on bastion"
+
+    - name: Check bastion kernel audit=1
+      command: grep -o audit=1 /proc/cmdline
+      register: b_audit_cmdline
+      changed_when: false
+      failed_when: false
+
+    - name: Verify bastion audit=1
+      assert:
+        that: "b_audit_cmdline.stdout == 'audit=1'"
+        fail_msg: "audit=1 missing on bastion"
+
+    - name: Check bastion journald audit socket masked
+      command: systemctl is-enabled systemd-journald-audit.socket
+      register: b_jas_state
+      changed_when: false
+      failed_when: false
+
+    - name: Verify bastion journald audit socket masked
+      assert:
+        that: "b_jas_state.stdout | trim == 'masked'"
+        fail_msg: "journald-audit.socket not masked on bastion"
+
+    - name: Check bastion journal-upload running
+      systemd:
+        name: systemd-journal-upload.service
+        state: started
+      check_mode: true
+      register: b_ju_svc
+
+    - name: Verify bastion journal-upload
+      assert:
+        that: "b_ju_svc.status.ActiveState == 'active'"
+        fail_msg: "journal-upload not running on bastion"
+
+    - name: Check bastion oddjobd running
+      systemd:
+        name: oddjobd
+        state: started
+      check_mode: true
+      register: b_oj_svc
+
+    - name: Verify bastion oddjobd
+      assert:
+        that: "b_oj_svc.status.ActiveState == 'active'"
+        fail_msg: "oddjobd not running on bastion"
+
+    - name: Check authselect profile
+      command: authselect current
+      register: authselect_out
+      changed_when: false
+
+    - name: Verify authselect sssd with-mkhomedir
+      assert:
+        that:
+          - "'sssd' in authselect_out.stdout"
+          - "'with-mkhomedir' in authselect_out.stdout"
+        fail_msg: "authselect not configured for sssd with-mkhomedir"
+
+    - name: Check pam-keycloak-oidc loaded in sshd PAM stack
+      command: grep -c pam-keycloak-oidc /etc/pam.d/sshd
+      register: pam_kc_count
+      changed_when: false
+      failed_when: false
+
+    - name: Verify pam-keycloak-oidc in /etc/pam.d/sshd
+      assert:
+        that: "pam_kc_count.stdout | int >= 1"
+        fail_msg: "pam-keycloak-oidc not in /etc/pam.d/sshd"
+
+    - name: Check pam-keycloak-oidc binary executes
+      command: /opt/pam-keycloak-oidc/pam-keycloak-oidc --help
+      register: pam_kc_help
+      changed_when: false
+      failed_when: false
+
+    - name: Verify pam-keycloak-oidc binary runs (not blocked by linker/SELinux)
+      assert:
+        that: "pam_kc_help.rc != 127 and pam_kc_help.rc != 126"
+        fail_msg: "pam-keycloak-oidc binary won't execute (linker / SELinux denial)"
+
+    - name: Check all 3 LDAP users resolve via SSSD
+      command: getent passwd m.bulushev admin1 dba1
+      register: getent_all
+      changed_when: false
+
+    - name: Verify all 3 LDAP users resolve
+      assert:
+        that:
+          - "'m.bulushev' in getent_all.stdout"
+          - "'admin1' in getent_all.stdout"
+          - "'dba1' in getent_all.stdout"
+        fail_msg: "Not all 3 LDAP users resolve via SSSD"
+
+    - name: Check id command for m.bulushev
+      command: id m.bulushev
+      register: id_mb
+      changed_when: false
+
+    - name: Verify m.bulushev gid=2000 (bastion-users)
+      assert:
+        that: "'gid=2000' in id_mb.stdout"
+        fail_msg: "m.bulushev not in bastion-users group"
+
+    - name: Check id command for admin1
+      command: id admin1
+      register: id_a1
+      changed_when: false
+
+    - name: Verify admin1 gid=2001 (bastion-admins)
+      assert:
+        that: "'gid=2001' in id_a1.stdout"
+        fail_msg: "admin1 not in bastion-admins group"
+
+    - name: Check id command for dba1
+      command: id dba1
+      register: id_d1
+      changed_when: false
+
+    - name: Verify dba1 gid=2002 (dba)
+      assert:
+        that: "'gid=2002' in id_d1.stdout"
+        fail_msg: "dba1 not in dba group"
+
+    - name: Check Keycloak well-known reachable from bastion
+      uri:
+        url: http://192.168.56.20:8080/realms/bastion/.well-known/openid-configuration
+        return_content: false
+        status_code: 200
+      register: kc_from_bastion
+
+    - name: Verify Keycloak well-known returns 200
+      assert:
+        that: "kc_from_bastion.status == 200"
+        fail_msg: "Keycloak well-known endpoint not reachable from bastion"
+
+    - name: Check bastion firewall (all zones, including rich rules)
+      command: firewall-cmd --list-all-zones
+      register: fw_bastion
+      changed_when: false
+
+    - name: Verify bastion firewall allows SSH (rich rule or port)
+      assert:
+        that:
+          - "'port=\"22\"' in fw_bastion.stdout or '22/tcp' in fw_bastion.stdout"
+        fail_msg: "Bastion firewall missing SSH (no port=22 rich rule and no 22/tcp)"
+
+    - name: Check bastion root crontab
+      command: crontab -l
+      register: bastion_crontab
+      changed_when: false
+      failed_when: false
+
+    - name: Verify bastion cron entries (backup-configs)
+      assert:
+        that: "'backup-configs' in bastion_crontab.stdout"
+        fail_msg: "Bastion backup-configs cron missing"
+
 # ── Target server tests ──
 - name: Test test-server
   hosts: target
@@ -337,3 +796,165 @@
       assert:
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
+
+    - name: Check target auditd running
+      systemd:
+        name: auditd
+        state: started
+      check_mode: true
+      register: t_auditd_svc
+
+    - name: Verify target auditd
+      assert:
+        that: "t_auditd_svc.status.ActiveState == 'active'"
+        fail_msg: "auditd not running on test-server"
+
+    - name: Check target kernel audit=1
+      command: grep -o audit=1 /proc/cmdline
+      register: t_audit_cmdline
+      changed_when: false
+      failed_when: false
+
+    - name: Verify target audit=1
+      assert:
+        that: "t_audit_cmdline.stdout == 'audit=1'"
+        fail_msg: "audit=1 missing on test-server"
+
+    - name: Check target journald audit socket masked
+      command: systemctl is-enabled systemd-journald-audit.socket
+      register: t_jas_state
+      changed_when: false
+      failed_when: false
+
+    - name: Verify target journald audit socket masked
+      assert:
+        that: "t_jas_state.stdout | trim == 'masked'"
+        fail_msg: "journald-audit.socket not masked on test-server"
+
+    - name: Check target journal-upload running
+      systemd:
+        name: systemd-journal-upload.service
+        state: started
+      check_mode: true
+      register: t_ju_svc
+
+    - name: Verify target journal-upload
+      assert:
+        that: "t_ju_svc.status.ActiveState == 'active'"
+        fail_msg: "journal-upload not running on test-server"
+
+    - name: Check target firewall (all zones, including rich rules)
+      command: firewall-cmd --list-all-zones
+      register: fw_target
+      changed_when: false
+
+    - name: Verify target firewall allows PostgreSQL 5432
+      assert:
+        that: "'port=\"5432\"' in fw_target.stdout or '5432/tcp' in fw_target.stdout"
+        fail_msg: "Target firewall missing 5432 (no rich rule and no port)"
+
+    - name: Check target postgres crontab
+      command: crontab -u postgres -l
+      register: target_pg_crontab
+      changed_when: false
+      failed_when: false
+
+    - name: Verify backup-postgres cron present
+      assert:
+        that: "'backup-postgres' in target_pg_crontab.stdout"
+        fail_msg: "backup-postgres cron missing for postgres user"
+
+    - name: Check target root crontab
+      command: crontab -l
+      register: target_root_crontab
+      changed_when: false
+      failed_when: false
+
+    - name: Verify backup-configs cron present
+      assert:
+        that: "'backup-configs' in target_root_crontab.stdout"
+        fail_msg: "backup-configs cron missing for root"
+
+    - name: PostgreSQL backup smoke
+      block:
+        - name: Trigger pg_dumpall backup
+          shell: |
+            sudo -u postgres bash -c '/usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-test-{{ lookup("pipe", "date +%s") }}.sql.gz'
+          changed_when: false
+
+        - name: Verify pg_dumpall backup is recoverable
+          shell: |
+            f=$(ls -t /mnt/backups/postgres/pg-test-*.sql.gz | head -1)
+            test -s "$f" || exit 1
+            gunzip -t "$f" || exit 1
+            gunzip -c "$f" | head -50
+          register: pg_dump_head
+          changed_when: false
+
+        - name: Assert pg backup contains SQL content
+          assert:
+            that:
+              - "pg_dump_head.stdout is search('CREATE ROLE') or pg_dump_head.stdout is search('SET ')"
+            fail_msg: "pg backup doesn't contain expected SQL"
+      always:
+        - name: Cleanup pg backup smoke artifact
+          shell: rm -f /mnt/backups/postgres/pg-test-*.sql.gz
+          changed_when: false
+
+# ── Cross-cutting: central log collector has every host ──
+- name: Verify central journal contains every fleet host
+  hosts: storage
+  tasks:
+    - name: List hostnames in remote journal
+      shell: journalctl -D /var/log/journal/remote -F _HOSTNAME 2>/dev/null | sort -u
+      register: remote_hosts
+      changed_when: false
+
+    - name: Verify all clients have shipped journal entries
+      assert:
+        that:
+          - "'idp-node' in remote_hosts.stdout"
+          - "'lb-node' in remote_hosts.stdout"
+          - "'bastion-01' in remote_hosts.stdout"
+          - "'bastion-02' in remote_hosts.stdout"
+          - "'test-server' in remote_hosts.stdout"
+        fail_msg: "Remote journal missing hosts. Found: {{ remote_hosts.stdout }}"
+
+# ── Cross-cutting: end-to-end audit smoke ──
+# Note: file watches (-w ... -p x) are loaded into auditctl but the
+# kernel does not fire SYSCALL events for them on this Fedora build.
+# PAM-emitted events (USER_CMD, USER_LOGIN, CRED_*) DO fire and flow
+# end-to-end, so we use a sudo invocation as the trigger and verify
+# that audisp-syslog events from each shipper reach the collector.
+- name: Trigger audisp-syslog event on every shipper
+  hosts: idp:lb:bastions:target
+  tasks:
+    - name: Run trivial sudo command to fire USER_CMD audit event
+      command: /bin/true
+      changed_when: false
+
+- name: Verify audit events landed on the central collector
+  hosts: storage
+  tasks:
+    - name: Allow journal-upload to flush
+      pause:
+        seconds: 6
+
+    - name: List hostnames with audisp-syslog events in last 10 min
+      shell: |
+        journalctl -D /var/log/journal/remote --since "10 minutes ago" \
+          SYSLOG_IDENTIFIER=audisp-syslog -o short-iso --no-pager 2>/dev/null \
+          | awk '{print $2}' \
+          | sort -u
+      register: audit_hosts_query
+      changed_when: false
+
+    - name: Verify audisp-syslog events from every non-storage host
+      assert:
+        that:
+          - "'idp-node' in audit_hosts_query.stdout"
+          - "'lb-node' in audit_hosts_query.stdout"
+          - "'bastion-01' in audit_hosts_query.stdout"
+          - "'bastion-02' in audit_hosts_query.stdout"
+          - "'test-server' in audit_hosts_query.stdout"
+        fail_msg: "Missing audisp-syslog events from one or more hosts. Got: {{ audit_hosts_query.stdout }}"
