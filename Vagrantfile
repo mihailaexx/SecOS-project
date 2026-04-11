@@ -76,9 +76,16 @@ Vagrant.configure("2") do |config|
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
   end
-  config.vm.provision "shell", inline: <<-SHELL
+  config.vm.provision "shell",
+  reboot: true,
+  inline: <<-SHELL
     restorecon -rv /etc/NetworkManager/system-connections/
+    nmcli con mod "Wired connection 1" ipv4.dns "8.8.8.8 1.1.1.1" ipv4.ignore-auto-dns yes                                                                            
+    nmcli con up "Wired connection 1"
     nmcli con mod "enp0s8" ipv4.never-default yes 2>/dev/null || true
     nmcli con up "enp0s8" 2>/dev/null || true
+    if ! grep -q 'audit=1' /proc/cmdline; then                                                                                                                    
+      grubby --update-kernel=ALL --args="audit=1 audit_backlog_limit=8192"                                                                                        
+    fi
   SHELL
 end
