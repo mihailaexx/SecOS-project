@@ -58,6 +58,17 @@
     - configs
     - homes
 
+# postgres on test-server runs the backup-postgres cron as the postgres
+# user (uid 26). NFS uses numeric uids, so the dir must be writable by
+# uid 26 — postgres user does not exist on storage-node.
+- name: Ensure postgres backup dir is writable by uid 26 (postgres on test-server)
+  file:
+    path: /export/backups/postgres
+    state: directory
+    owner: "26"
+    group: "26"
+    mode: "0755"
+
 - name: Configure NFS exports
   template:
     src: exports.j2
