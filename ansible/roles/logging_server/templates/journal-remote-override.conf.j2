@@ -1,0 +1,6 @@
+[Service]
+# Override upstream HTTPS default with plain HTTP.
+# The socket unit hands us fd 3; --listen-http=-3 speaks HTTP over that fd.
+# --split-mode=host keeps one journal file per source host.
+ExecStart=
+ExecStart=/usr/lib/systemd/systemd-journal-remote --listen-http=-3 --output=/var/log/journal/remote/ --split-mode=host

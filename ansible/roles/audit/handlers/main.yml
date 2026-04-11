@@ -1,0 +1,10 @@
+---
+# auditd is PID-1 managed on Fedora and ignores systemctl restart.
+# Use its own service-reload path for plugins, and augenrules for rules.
+- name: restart auditd
+  command: /usr/sbin/service auditd restart
+  changed_when: true
+
+- name: reload audit rules
+  command: /usr/sbin/augenrules --load
+  changed_when: true

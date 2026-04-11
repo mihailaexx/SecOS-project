@@ -101,3 +101,22 @@
   hosts: target
   roles:
     - target
+
+# ── Observability layer ──
+# Deploy auditd first so later changes are captured, then bring up
+# the central log sink, then enable shippers on the rest of the fleet.
+
+- name: Configure auditd on all hosts
+  hosts: all
+  roles:
+    - audit
+
+- name: Configure central log sink (storage-node)
+  hosts: storage
+  roles:
+    - logging_server
+
+- name: Configure journal shippers on all non-storage hosts
+  hosts: idp:lb:bastions:target
+  roles:
+    - logging_client

@@ -1,0 +1,53 @@
+## SECOS baseline audit rules — applied to every host.
+## Keys are chosen so ausearch -k <key> pulls a single failure class.
+
+## Credential store access
+-w /etc/shadow  -p wra -k identity
+-w /etc/gshadow -p wra -k identity
+-w /etc/passwd  -p wa  -k identity
+-w /etc/group   -p wa  -k identity
+
+## Privilege escalation config
+-w /etc/sudoers    -p wa -k privilege
+-w /etc/sudoers.d/ -p wa -k privilege
+
+## PAM stack
+-w /etc/pam.d/      -p wa -k pam
+-w /etc/security/   -p wa -k pam
+
+## SSH daemon config
+-w /etc/ssh/sshd_config    -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+
+## SSSD (LDAP client) config
+-w /etc/sssd/ -p wa -k sssd
+
+## Firewalld zones
+-w /etc/firewalld/ -p wa -k firewall
+
+## auditd self-tamper watches (keep these last in the base file)
+-w /etc/audit/       -p wa -k auditd
+-w /etc/libaudit.conf -p wa -k auditd
+-w /sbin/auditctl    -p x  -k auditd
+-w /sbin/auditd      -p x  -k auditd
+-w /var/log/audit/   -p wa -k log_tamper
+
+## Priv-mgmt binaries
+-w /usr/bin/sudo     -p x -k priv_cmds
+-w /usr/sbin/visudo  -p x -k priv_cmds
+-w /usr/sbin/useradd -p x -k priv_cmds
+-w /usr/sbin/usermod -p x -k priv_cmds
+-w /usr/sbin/userdel -p x -k priv_cmds
+-w /usr/sbin/groupadd -p x -k priv_cmds
+-w /usr/sbin/groupdel -p x -k priv_cmds
+-w /usr/bin/passwd   -p x -k priv_cmds
+
+## Kernel module loading
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
+
+## Time changes
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time
+-w /etc/localtime -p wa -k time
+
+## Mounts (storage anomalies, unexpected NFS remounts)
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=unset -k mounts

@@ -1,0 +1,5 @@
+## storage-node — NFS, RAID, exports
+-w /etc/exports     -p wa -k nfs_cfg
+-w /etc/fstab       -p wa -k fstab
+-w /etc/mdadm.conf  -p wa -k raid_cfg
+-w /usr/sbin/exportfs -p x -k nfs_cmds

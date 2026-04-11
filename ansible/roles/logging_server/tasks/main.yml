@@ -1,0 +1,53 @@
+---
+# Central journal sink for storage-node.
+# Clients ship via systemd-journal-upload → port 19532 (HTTP).
+# Transport is plain HTTP; network is restricted to 192.168.56.0/24
+# by the internal-bastion firewalld zone.
+
+- name: Install systemd-journal-remote
+  dnf:
+    name: systemd-journal-remote
+    state: present
+
+- name: Ensure journal-remote drop-in directory
+  file:
+    path: /etc/systemd/system/systemd-journal-remote.service.d
+    state: directory
+
+- name: Deploy journal-remote HTTP override
+  template:
+    src: journal-remote-override.conf.j2
+    dest: /etc/systemd/system/systemd-journal-remote.service.d/override.conf
+  notify:
+    - daemon reload
+    - restart journal-remote
+
+- name: Ensure remote journal directory exists
+  file:
+    path: /var/log/journal/remote
+    state: directory
+    owner: systemd-journal-remote
+    group: systemd-journal-remote
+    mode: "2755"
+
+- name: Enable and start journal-remote socket
+  systemd:
+    name: systemd-journal-remote.socket
+    enabled: true
+    state: started
+
+- name: Enable and start journal-remote service
+  systemd:
+    name: systemd-journal-remote.service
+    enabled: true
+    state: started
+
+# ── Retention: prune remote journals older than 30 days ──
+- name: Daily remote-journal retention cron
+  cron:
+    name: prune-remote-journals
+    minute: "30"
+    hour: "3"
+    user: root
+    job: >-
+      journalctl --directory=/var/log/journal/remote --vacuum-time=30d >/dev/null 2>&1

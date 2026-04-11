@@ -1,0 +1,6 @@
+## idp-node — Keycloak + OpenLDAP
+-w /opt/keycloak/conf/          -p wa -k keycloak_cfg
+-w /opt/keycloak/data/import/   -p wa -k keycloak_cfg
+-w /etc/systemd/system/keycloak.service -p wa -k keycloak_cfg
+-w /etc/openldap/slapd.d/       -p wa -k ldap_cfg
+-w /var/lib/ldap/               -p wa -k ldap_data

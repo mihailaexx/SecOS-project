@@ -1,0 +1,141 @@
+---
+# auditd + baseline security rules for every host, plus host-specific
+# watches selected by inventory group. Audit events flow to journald
+# via audisp-syslog and then to storage-node via journal-upload, so a
+# single query on the collector can show audit hits from the whole fleet.
+
+- name: Install auditd and audisp plugins
+  dnf:
+    name:
+      - audit
+      - audispd-plugins
+    state: present
+
+# Fedora boots with audit_enabled=0; syscall/file-watch hooks are
+# optimized out until the kernel is booted with audit=1. Setting it
+# at runtime via auditctl is not enough for -w file watches to fire.
+# A reboot is required for these args to take effect.
+- name: Check current kernel cmdline
+  command: grubby --info=DEFAULT
+  register: grubby_info
+  changed_when: false
+
+- name: Ensure audit kernel parameters
+  command: grubby --update-kernel=ALL --args="audit=1 audit_backlog_limit=8192"
+  when: "'audit=1' not in grubby_info.stdout"
+  register: grubby_update
+
+# The shipped auditd.service declares PIDFile=/run/audit/auditd.pid but
+# no RuntimeDirectory, so /run/audit never gets created in the sandbox
+# and auditd fails with "Cannot create run directory /run/audit".
+- name: Ensure auditd drop-in directory
+  file:
+    path: /etc/systemd/system/auditd.service.d
+    state: directory
+    mode: "0755"
+
+- name: Provide RuntimeDirectory for auditd pidfile
+  copy:
+    dest: /etc/systemd/system/auditd.service.d/runtime-dir.conf
+    mode: "0644"
+    content: |
+      [Service]
+      RuntimeDirectory=audit
+      RuntimeDirectoryMode=0755
+  register: auditd_dropin
+
+- name: Reload systemd after auditd drop-in
+  systemd:
+    daemon_reload: true
+  when: auditd_dropin.changed
+
+# systemd-journald-audit.socket grabs the kernel audit netlink on boot
+# and journald registers itself as the kernel audit_pid, which blocks
+# auditd from registering ("Unable to set audit pid"). Mask the socket
+# AND restart journald — masking alone does not clear audit_pid, only a
+# journald restart releases it. Audit events still reach journald via
+# audisp-syslog → /dev/log.
+- name: Mask journald audit socket
+  systemd:
+    name: systemd-journald-audit.socket
+    state: stopped
+    enabled: false
+    masked: true
+  register: journald_audit_mask
+
+- name: Restart journald to release kernel audit_pid
+  systemd:
+    name: systemd-journald
+    state: restarted
+  when: journald_audit_mask.changed
+
+- name: Enable audisp-syslog plugin (audit → journald)
+  copy:
+    dest: /etc/audit/plugins.d/syslog.conf
+    mode: "0640"
+    content: |
+      active = yes
+      path = /sbin/audisp-syslog
+      type = always
+      args = LOG_INFO
+      format = string
+  notify: restart auditd
+
+- name: Deploy base audit rules (all hosts)
+  template:
+    src: 50-secos-base.rules.j2
+    dest: /etc/audit/rules.d/50-secos-base.rules
+    mode: "0640"
+  notify: reload audit rules
+
+- name: Deploy storage-node audit rules
+  template:
+    src: 60-secos-storage.rules.j2
+    dest: /etc/audit/rules.d/60-secos-storage.rules
+    mode: "0640"
+  when: "'storage' in group_names"
+  notify: reload audit rules
+
+- name: Deploy idp-node audit rules
+  template:
+    src: 60-secos-idp.rules.j2
+    dest: /etc/audit/rules.d/60-secos-idp.rules
+    mode: "0640"
+  when: "'idp' in group_names"
+  notify: reload audit rules
+
+- name: Deploy lb-node audit rules
+  template:
+    src: 60-secos-lb.rules.j2
+    dest: /etc/audit/rules.d/60-secos-lb.rules
+    mode: "0640"
+  when: "'lb' in group_names"
+  notify: reload audit rules
+
+- name: Deploy bastion audit rules
+  template:
+    src: 60-secos-bastions.rules.j2
+    dest: /etc/audit/rules.d/60-secos-bastions.rules
+    mode: "0640"
+  when: "'bastions' in group_names"
+  notify: reload audit rules
+
+- name: Deploy target audit rules
+  template:
+    src: 60-secos-target.rules.j2
+    dest: /etc/audit/rules.d/60-secos-target.rules
+    mode: "0640"
+  when: "'target' in group_names"
+  notify: reload audit rules
+
+# Clear lingering "failed" state from prior runs so systemctl start
+# does not race the auto-restart scheduler. No-op on healthy hosts.
+- name: Clear failed auditd state
+  command: systemctl reset-failed auditd.service
+  changed_when: false
+
+- name: Enable and start auditd
+  systemd:
+    name: auditd
+    enabled: true
+    state: started
