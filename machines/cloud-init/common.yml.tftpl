@@ -1,0 +1,34 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${hostname}.secos.local
+manage_etc_hosts: true
+
+user: vagrant
+password: vagrant
+chpasswd:
+  expire: false
+ssh_pwauth: true
+
+packages:
+  - cloud-utils-growpart
+  - python3
+
+runcmd:
+  # Grow root partition to use full boot disk
+  - "ROOTPART=$(findmnt -no SOURCE / | grep -o '[0-9]*$')"
+  - "ROOTDISK=$(findmnt -no SOURCE / | sed 's/[0-9]*$//')"
+  - "growpart $ROOTDISK $ROOTPART || true"
+  - "btrfs filesystem resize max /"
+  # Configure DNS on default connection
+  - "DEF_CON=$(nmcli -t -f NAME,DEVICE con show --active | head -1 | cut -d: -f1)"
+  - "nmcli con mod \"$DEF_CON\" ipv4.dns '8.8.8.8 1.1.1.1' ipv4.ignore-auto-dns yes || true"
+  - "nmcli con up \"$DEF_CON\" || true"
+  # Static IP on secondary NIC (secos-net), prevent it from overriding default route
+  - "nmcli -t -f DEVICE,TYPE device status | grep ethernet | tail -1 | cut -d: -f1 | xargs -I{} nmcli con add type ethernet ifname {} con-name secos-net ip4 ${static_ip}/24"
+  - "nmcli con mod secos-net ipv4.never-default yes"
+  - "nmcli con up secos-net"
+  # Enable kernel audit subsystem (takes effect after reboot)
+  - "grubby --update-kernel=ALL --args='audit=1 audit_backlog_limit=8192'"
+
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFOIpYhfWMdiop1hFGc0SBbLIzKhtMK3GvV6T449ju6t mikhailaex@fedora

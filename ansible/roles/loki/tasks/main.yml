@@ -1,0 +1,70 @@
+---
+- name: Create loki system user
+  user:
+    name: loki
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create loki directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: loki
+    group: loki
+    mode: "0755"
+  loop:
+    - /etc/loki
+    - /var/lib/loki
+    - /var/lib/loki/chunks
+    - /var/lib/loki/rules
+    - /var/lib/loki/compactor
+
+- name: Download loki binary
+  get_url:
+    url: "https://github.com/grafana/loki/releases/download/v{{ loki_version }}/loki-{{ loki_arch }}.zip"
+    dest: "/tmp/loki-{{ loki_version }}.zip"
+  register: loki_download
+
+- name: Install unzip
+  dnf:
+    name: unzip
+    state: present
+
+- name: Extract loki binary
+  command: unzip -o /tmp/loki-{{ loki_version }}.zip -d /tmp/loki-extract
+  args:
+    creates: /tmp/loki-extract/loki-{{ loki_arch }}
+  when: loki_download.changed
+
+- name: Install loki binary
+  copy:
+    src: "/tmp/loki-extract/loki-{{ loki_arch }}"
+    dest: /usr/local/bin/loki
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart loki
+
+- name: Deploy loki configuration
+  template:
+    src: loki-config.yml.j2
+    dest: /etc/loki/config.yml
+    owner: loki
+    group: loki
+  notify: restart loki
+
+- name: Deploy loki systemd unit
+  template:
+    src: loki.service.j2
+    dest: /etc/systemd/system/loki.service
+  notify:
+    - daemon reload
+    - restart loki
+
+- name: Enable and start loki
+  systemd:
+    name: loki
+    enabled: true
+    state: started

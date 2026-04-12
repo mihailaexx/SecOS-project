@@ -1,0 +1,39 @@
+---
+- name: Add Grafana RPM repository
+  template:
+    src: grafana.repo.j2
+    dest: /etc/yum.repos.d/grafana.repo
+
+- name: Install Grafana
+  dnf:
+    name: grafana
+    state: present
+
+- name: Ensure provisioning datasources directory
+  file:
+    path: /etc/grafana/provisioning/datasources
+    state: directory
+    owner: grafana
+    group: grafana
+
+- name: Deploy Prometheus and Loki datasources
+  copy:
+    src: datasources.yml
+    dest: /etc/grafana/provisioning/datasources/datasources.yml
+    owner: grafana
+    group: grafana
+  notify: restart grafana
+
+- name: Deploy Grafana systemd unit
+  template:
+    src: grafana.service.j2
+    dest: /etc/systemd/system/grafana-server.service
+  notify:
+    - daemon reload
+    - restart grafana
+
+- name: Enable and start Grafana
+  systemd:
+    name: grafana-server
+    enabled: true
+    state: started

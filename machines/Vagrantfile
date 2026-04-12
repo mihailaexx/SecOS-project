@@ -18,9 +18,10 @@ Vagrant.configure("2") do |config|
     nfs.vm.disk :disk, size: "25GB", name: "storage_raid_1"
     nfs.vm.disk :disk, size: "25GB", name: "storage_raid_2"
     nfs.vm.network "private_network", ip: "192.168.56.50"
+    nfs.vm.network "forwarded_port", guest: 3000, host: 3000
     nfs.vm.provider "virtualbox" do |vb|
-      vb.memory = "1024"
-      vb.cpus = 1
+      vb.memory = "3072"
+      vb.cpus = 2
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
   end
@@ -40,7 +41,7 @@ Vagrant.configure("2") do |config|
     lb.vm.disk :disk, size: "10GB", primary: true
     lb.vm.network "private_network", ip: "192.168.56.10"
     lb.vm.provider "virtualbox" do |vb|
-      vb.memory = "1024"
+      vb.memory = "1536"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
@@ -50,7 +51,7 @@ Vagrant.configure("2") do |config|
     bastion1.vm.disk :disk, size: "10GB", primary: true
     bastion1.vm.network "private_network", ip: "192.168.56.11"
     bastion1.vm.provider "virtualbox" do |vb|
-      vb.memory = "1024"
+      vb.memory = "1536"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
@@ -60,7 +61,7 @@ Vagrant.configure("2") do |config|
     bastion2.vm.disk :disk, size: "10GB", primary: true
     bastion2.vm.network "private_network", ip: "192.168.56.12"
     bastion2.vm.provider "virtualbox" do |vb|
-      vb.memory = "1024"
+      vb.memory = "1536"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end
@@ -71,7 +72,7 @@ Vagrant.configure("2") do |config|
     target.vm.disk :disk, size: "20GB", name: "target_pgdata"
     target.vm.network "private_network", ip: "192.168.56.60"
     target.vm.provider "virtualbox" do |vb|
-      vb.memory = "1024"
+      vb.memory = "1536"
       vb.cpus = 1
       vb.customize ["modifyvm", :id, "--ioapic", "on"]
     end

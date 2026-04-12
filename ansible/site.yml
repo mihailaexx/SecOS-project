@@ -120,3 +120,33 @@
   hosts: idp:lb:bastions:target
   roles:
     - logging_client
+
+# ── Monitoring stack ──
+# Node Exporter on all hosts → Prometheus scrapes metrics.
+# Promtail on all hosts → ships journal logs to Loki.
+# Prometheus, Loki, Grafana on storage-node (central dashboard).
+
+- name: Deploy Node Exporter on all hosts
+  hosts: all
+  roles:
+    - node_exporter
+
+- name: Deploy Prometheus on storage-node
+  hosts: storage
+  roles:
+    - prometheus
+
+- name: Deploy Loki on storage-node
+  hosts: storage
+  roles:
+    - loki
+
+- name: Deploy Promtail on all hosts
+  hosts: all
+  roles:
+    - promtail
+
+- name: Deploy Grafana on storage-node
+  hosts: storage
+  roles:
+    - grafana

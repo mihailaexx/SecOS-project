@@ -1,0 +1,20 @@
+[Unit]
+Description=Grafana Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=grafana
+Group=grafana
+Type=simple
+ExecStart=/usr/share/grafana/bin/grafana server \
+  --config=/etc/grafana/grafana.ini \
+  --homepath=/usr/share/grafana \
+  cfg:default.paths.logs=/var/log/grafana \
+  cfg:default.paths.data=/var/lib/grafana \
+  cfg:default.paths.plugins=/var/lib/grafana/plugins \
+  cfg:default.paths.provisioning=/etc/grafana/provisioning
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
