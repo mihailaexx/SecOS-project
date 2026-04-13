@@ -62,6 +62,15 @@
     - daemon reload
     - restart promtail
 
+- name: Wait for Loki /ready before starting promtail
+  uri:
+    url: "http://{{ hostvars[groups['storage'][0]].ansible_host }}:3100/ready"
+    status_code: 200
+  register: loki_ready
+  retries: 30
+  delay: 5
+  until: loki_ready.status == 200
+
 - name: Enable and start promtail
   systemd:
     name: promtail
