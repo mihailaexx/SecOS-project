@@ -37,12 +37,25 @@
     - daemon reload
     - restart node_exporter
 
-- name: Open node_exporter port in firewall
+- name: List active firewalld zones
+  command: firewall-cmd --get-active-zones
+  register: active_zones
+  changed_when: false
+  failed_when: false
+
+- name: Open node_exporter port in every active zone
   firewalld:
     port: 9100/tcp
     permanent: true
     state: enabled
     immediate: true
+    zone: "{{ item }}"
+  loop: >-
+    {{ active_zones.stdout_lines
+       | reject('match','^\\s')
+       | reject('equalto','')
+       | list }}
+  when: active_zones.rc == 0
   ignore_errors: true
 
 - name: Enable and start node_exporter

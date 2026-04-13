@@ -13,7 +13,7 @@ locals {
 
 # Base Fedora cloud image
 resource "libvirt_volume" "fedora_base" {
-  name = "fedora42-base.qcow2"
+  name = "fedora42-secos-base.qcow2"
   pool = "default"
 
   target = {

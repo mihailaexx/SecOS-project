@@ -958,3 +958,210 @@
           - "'bastion-02' in audit_hosts_query.stdout"
           - "'test-server' in audit_hosts_query.stdout"
         fail_msg: "Missing audisp-syslog events from one or more hosts. Got: {{ audit_hosts_query.stdout }}"
+
+# ── Monitoring stack: Node Exporter + Promtail on every host ──
+- name: Test node_exporter + promtail on all hosts
+  hosts: all
+  tasks:
+    - name: Check node_exporter running
+      systemd:
+        name: node_exporter
+        state: started
+      check_mode: true
+      register: ne_svc
+
+    - name: Verify node_exporter active
+      assert:
+        that: "ne_svc.status.ActiveState == 'active'"
+        fail_msg: "node_exporter not running on {{ inventory_hostname }}"
+
+    - name: Scrape node_exporter /metrics
+      uri:
+        url: http://127.0.0.1:9100/metrics
+        return_content: true
+        status_code: 200
+      register: ne_metrics
+
+    - name: Verify node_exporter emits node_* metrics
+      assert:
+        that: "'node_cpu_seconds_total' in ne_metrics.content"
+        fail_msg: "node_exporter /metrics missing node_cpu_seconds_total"
+
+    - name: Check promtail running
+      systemd:
+        name: promtail
+        state: started
+      check_mode: true
+      register: pt_svc
+
+    - name: Verify promtail active
+      assert:
+        that: "pt_svc.status.ActiveState == 'active'"
+        fail_msg: "promtail not running on {{ inventory_hostname }}"
+
+    - name: Promtail /ready
+      uri:
+        url: http://127.0.0.1:9080/ready
+        status_code: 200
+      register: pt_ready
+      retries: 5
+      delay: 3
+      until: pt_ready.status == 200
+
+    - name: Promtail /metrics exposes send-batch counter
+      uri:
+        url: http://127.0.0.1:9080/metrics
+        return_content: true
+        status_code: 200
+      register: pt_metrics
+
+    - name: Verify promtail has shipped at least one batch to Loki
+      assert:
+        that: "pt_metrics.content is search('promtail_sent_bytes_total')"
+        fail_msg: "promtail has no promtail_sent_bytes_total metric on {{ inventory_hostname }}"
+
+# ── Monitoring stack: Prometheus / Loki / Grafana on storage-node ──
+- name: Test Prometheus, Loki, Grafana on storage-node
+  hosts: storage
+  tasks:
+    - name: Check Prometheus running
+      systemd:
+        name: prometheus
+        state: started
+      check_mode: true
+      register: prom_svc
+
+    - name: Verify Prometheus active
+      assert:
+        that: "prom_svc.status.ActiveState == 'active'"
+        fail_msg: "Prometheus not running"
+
+    - name: Prometheus /-/healthy
+      uri:
+        url: http://127.0.0.1:9090/-/healthy
+        status_code: 200
+
+    - name: Prometheus /-/ready
+      uri:
+        url: http://127.0.0.1:9090/-/ready
+        status_code: 200
+      register: prom_ready
+      retries: 5
+      delay: 3
+      until: prom_ready.status == 200
+
+    - name: Query Prometheus active targets
+      uri:
+        url: http://127.0.0.1:9090/api/v1/targets?state=active
+        return_content: true
+      register: prom_targets
+
+    - name: List down targets
+      set_fact:
+        down_targets: >-
+          {{ prom_targets.json.data.activeTargets
+             | rejectattr('health','equalto','up')
+             | map(attribute='scrapeUrl') | list }}
+
+    - name: Verify all Prometheus scrape targets are up
+      assert:
+        that: "down_targets | length == 0"
+        fail_msg: "Prometheus targets down: {{ down_targets }}"
+
+    - name: Verify Prometheus scrapes every fleet host (node_exporter)
+      assert:
+        that: >-
+          (prom_targets.json.data.activeTargets
+             | selectattr('labels.job','equalto','node_exporter')
+             | map(attribute='labels.instance') | list
+             | length) >= 6
+        fail_msg: "Prometheus node_exporter job missing instances (got {{ prom_targets.json.data.activeTargets | selectattr('labels.job','equalto','node_exporter') | map(attribute='labels.instance') | list }})"
+
+    - name: Check Loki running
+      systemd:
+        name: loki
+        state: started
+      check_mode: true
+      register: loki_svc
+
+    - name: Verify Loki active
+      assert:
+        that: "loki_svc.status.ActiveState == 'active'"
+        fail_msg: "Loki not running"
+
+    - name: Loki /ready
+      uri:
+        url: http://127.0.0.1:3100/ready
+        status_code: 200
+      register: loki_ready
+      retries: 10
+      delay: 6
+      until: loki_ready.status == 200
+
+    - name: Loki /metrics responds
+      uri:
+        url: http://127.0.0.1:3100/metrics
+        status_code: 200
+
+    - name: Query Loki label values for 'host'
+      uri:
+        url: "http://127.0.0.1:3100/loki/api/v1/label/host/values"
+        return_content: true
+      register: loki_hosts
+
+    - name: Verify Loki has received logs from every host
+      assert:
+        that:
+          - "'storage-node' in (loki_hosts.json.data | default([]))"
+          - "'idp-node' in (loki_hosts.json.data | default([]))"
+          - "'lb-node' in (loki_hosts.json.data | default([]))"
+          - "'bastion-01' in (loki_hosts.json.data | default([]))"
+          - "'bastion-02' in (loki_hosts.json.data | default([]))"
+          - "'test-server' in (loki_hosts.json.data | default([]))"
+        fail_msg: "Loki missing hosts. Got: {{ loki_hosts.json.data | default([]) }}"
+
+    - name: Check Grafana running
+      systemd:
+        name: grafana-server
+        state: started
+      check_mode: true
+      register: graf_svc
+
+    - name: Verify Grafana active
+      assert:
+        that: "graf_svc.status.ActiveState == 'active'"
+        fail_msg: "Grafana not running"
+
+    - name: Grafana /api/health
+      uri:
+        url: http://127.0.0.1:3000/api/health
+        return_content: true
+        status_code: 200
+      register: graf_health
+      retries: 10
+      delay: 3
+      until: graf_health.status == 200
+
+    - name: Verify Grafana database healthy
+      assert:
+        that: "graf_health.json.database == 'ok'"
+        fail_msg: "Grafana database not ok: {{ graf_health.json }}"
+
+    - name: Grafana datasources are configured
+      uri:
+        url: http://127.0.0.1:3000/api/datasources
+        user: admin
+        password: admin
+        force_basic_auth: true
+        return_content: true
+        status_code: 200
+      register: graf_ds
+      failed_when: false
+
+    - name: Verify Prometheus + Loki datasources present (if API reachable)
+      assert:
+        that:
+          - "graf_ds.json | selectattr('type','equalto','prometheus') | list | length >= 1"
+          - "graf_ds.json | selectattr('type','equalto','loki') | list | length >= 1"
+        fail_msg: "Grafana missing datasource(s): {{ graf_ds.json | map(attribute='type') | list }}"
+      when: graf_ds.status is defined and graf_ds.status == 200

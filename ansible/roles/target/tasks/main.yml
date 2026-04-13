@@ -8,12 +8,12 @@
 - name: Format PostgreSQL data disk with XFS
   filesystem:
     fstype: xfs
-    dev: /dev/sdb
+    dev: /dev/vdb
 
 - name: Mount PostgreSQL data disk
   mount:
     path: /var/lib/pgsql
-    src: /dev/sdb
+    src: /dev/vdb
     fstype: xfs
     state: mounted
 

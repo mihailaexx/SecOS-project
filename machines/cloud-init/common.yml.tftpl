@@ -27,8 +27,14 @@ runcmd:
   - "nmcli -t -f DEVICE,TYPE device status | grep ethernet | tail -1 | cut -d: -f1 | xargs -I{} nmcli con add type ethernet ifname {} con-name secos-net ip4 ${static_ip}/24"
   - "nmcli con mod secos-net ipv4.never-default yes"
   - "nmcli con up secos-net"
-  # Enable kernel audit subsystem (takes effect after reboot)
+  # Enable kernel audit subsystem (takes effect after reboot below)
   - "grubby --update-kernel=ALL --args='audit=1 audit_backlog_limit=8192'"
+
+power_state:
+  mode: reboot
+  condition: true
+  delay: 0
+  message: "Rebooting to activate audit=1"
 
 ssh_authorized_keys:
   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFOIpYhfWMdiop1hFGc0SBbLIzKhtMK3GvV6T449ju6t mikhailaex@fedora
