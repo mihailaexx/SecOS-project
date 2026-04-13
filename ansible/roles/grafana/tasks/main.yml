@@ -24,6 +24,40 @@
     group: grafana
   notify: restart grafana
 
+- name: Ensure provisioning dashboards directory
+  file:
+    path: /etc/grafana/provisioning/dashboards
+    state: directory
+    owner: grafana
+    group: grafana
+
+- name: Ensure dashboards storage directory
+  file:
+    path: /var/lib/grafana/dashboards
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: "0755"
+
+- name: Deploy dashboards provider config
+  copy:
+    src: dashboards-provider.yml
+    dest: /etc/grafana/provisioning/dashboards/secos.yml
+    owner: grafana
+    group: grafana
+  notify: restart grafana
+
+- name: Deploy SecOS dashboards
+  copy:
+    src: "{{ item }}"
+    dest: "/var/lib/grafana/dashboards/{{ item }}"
+    owner: grafana
+    group: grafana
+    mode: "0644"
+  loop:
+    - node-overview.json
+  notify: restart grafana
+
 - name: Deploy Grafana systemd unit
   template:
     src: grafana.service.j2

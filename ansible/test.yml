@@ -1072,10 +1072,10 @@
       assert:
         that: >-
           (prom_targets.json.data.activeTargets
-             | selectattr('labels.job','equalto','node_exporter')
+             | selectattr('labels.job','equalto','node')
              | map(attribute='labels.instance') | list
              | length) >= 6
-        fail_msg: "Prometheus node_exporter job missing instances (got {{ prom_targets.json.data.activeTargets | selectattr('labels.job','equalto','node_exporter') | map(attribute='labels.instance') | list }})"
+        fail_msg: "Prometheus 'node' job missing instances (got {{ prom_targets.json.data.activeTargets | selectattr('labels.job','equalto','node') | map(attribute='labels.instance') | list }})"
 
     - name: Check Loki running
       systemd:
