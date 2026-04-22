@@ -1,4 +1,0 @@
----
-promtail_version: "3.3.2"
-promtail_arch: "linux-amd64"
-loki_url: "http://192.168.56.50:3100"

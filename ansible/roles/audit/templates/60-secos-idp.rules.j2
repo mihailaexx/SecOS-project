@@ -1,6 +1,5 @@
-## idp-node — Keycloak + OpenLDAP
--w /opt/keycloak/conf/          -p wa -k keycloak_cfg
--w /opt/keycloak/data/import/   -p wa -k keycloak_cfg
--w /etc/systemd/system/keycloak.service -p wa -k keycloak_cfg
--w /etc/openldap/slapd.d/       -p wa -k ldap_cfg
--w /var/lib/ldap/               -p wa -k ldap_data
+## idp-node — Keycloak + OpenLDAP (containerized)
+-w /etc/secos/keycloak/        -p wa -k keycloak_cfg
+-w /etc/secos/openldap/        -p wa -k ldap_cfg
+-w /opt/secos/idp/compose.yml  -p wa -k idp_compose
+-w /etc/systemd/system/secos-idp.service -p wa -k idp_unit

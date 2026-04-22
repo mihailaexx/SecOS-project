@@ -9,3 +9,6 @@
 **/.terraform.lock.hcl
 **/terraform.tfstate
 **/terraform.tfstate.*
+
+# Large pre-staged artifacts (re-fetched locally by the role)
+ansible/files/cache/keycloak-*.tar.gz

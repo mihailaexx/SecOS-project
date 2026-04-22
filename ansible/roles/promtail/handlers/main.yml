@@ -1,9 +1,0 @@
----
-- name: daemon reload
-  systemd:
-    daemon_reload: true
-
-- name: restart promtail
-  systemd:
-    name: promtail
-    state: restarted

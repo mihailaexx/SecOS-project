@@ -1,0 +1,63 @@
+---
+- name: Create config tree
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/secos
+    - /etc/secos/promtail
+    - /opt/secos/agents
+
+- name: Deploy Promtail config
+  template:
+    src: promtail-config.yml.j2
+    dest: /etc/secos/promtail/config.yml
+    mode: "0644"
+  notify: restart agents
+
+- name: Deploy compose file
+  copy:
+    src: "{{ playbook_dir }}/../containers/agents/compose.yml"
+    dest: /opt/secos/agents/compose.yml
+    mode: "0644"
+  notify: restart agents
+
+- name: Deploy compose env file
+  template:
+    src: agents.env.j2
+    dest: /opt/secos/agents/.env
+    mode: "0644"
+  notify: restart agents
+
+- name: Install agents systemd unit
+  template:
+    src: secos-agents.service.j2
+    dest: /etc/systemd/system/secos-agents.service
+    mode: "0644"
+  notify:
+    - daemon reload
+    - restart agents
+
+- name: Gather service facts (for firewalld detection)
+  service_facts:
+
+- name: Open node_exporter port on all active firewalld zones
+  shell: |
+    set -o pipefail
+    zones=$(firewall-cmd --get-active-zones | awk 'NR%2==1')
+    for z in $zones; do
+      firewall-cmd --permanent --zone=$z --add-port=9100/tcp
+    done
+    firewall-cmd --reload
+  changed_when: false
+  when: ansible_facts.services['firewalld.service'].state | default('stopped') == 'running'
+
+- name: Enable and start agents stack
+  systemd:
+    name: secos-agents
+    enabled: true
+    state: started
+    daemon_reload: true

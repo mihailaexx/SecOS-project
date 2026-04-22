@@ -187,39 +187,30 @@
 - name: Test idp-node
   hosts: idp
   tasks:
-    - name: Check slapd running
+    - name: Check secos-idp systemd unit running
       systemd:
-        name: slapd
+        name: secos-idp
         state: started
       check_mode: true
-      register: slapd_svc
+      register: idp_svc
 
-    - name: Verify slapd
+    - name: Verify secos-idp active
       assert:
-        that: "slapd_svc.status.ActiveState == 'active'"
-        fail_msg: "slapd not running"
+        that: "idp_svc.status.ActiveState == 'active'"
+        fail_msg: "secos-idp stack (OpenLDAP + Keycloak containers) not running"
 
     - name: Test LDAP search
       command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(uid=m.bulushev)" uid
       register: ldap_search
       changed_when: false
+      retries: 10
+      delay: 6
+      until: ldap_search.rc == 0
 
     - name: Verify LDAP user exists
       assert:
         that: "'uid: m.bulushev' in ldap_search.stdout"
         fail_msg: "LDAP user m.bulushev not found"
-
-    - name: Check Keycloak running
-      systemd:
-        name: keycloak
-        state: started
-      check_mode: true
-      register: kc_svc
-
-    - name: Verify Keycloak
-      assert:
-        that: "kc_svc.status.ActiveState == 'active'"
-        fail_msg: "Keycloak not running"
 
     - name: Test Keycloak HTTP
       uri:
@@ -227,6 +218,9 @@
         return_content: false
         status_code: 200
       register: kc_http
+      retries: 20
+      delay: 6
+      until: kc_http.status == 200
 
     - name: Verify Keycloak realm
       assert:
@@ -330,11 +324,15 @@
 
     - name: LDAP backup smoke
       block:
-        - name: Trigger slapcat backup
-          shell: slapcat | gzip > /mnt/backups/ldap/ldap-test-{{ lookup('pipe', 'date +%s') }}.ldif.gz
+        - name: Trigger ldapsearch-based backup (matches role's backup script)
+          shell: |
+            ldapsearch -x -H ldap://127.0.0.1:389 \
+              -D "cn=admin,dc=bastion,dc=local" -w admin \
+              -b "dc=bastion,dc=local" \
+              | gzip > /mnt/backups/ldap/ldap-test-{{ lookup('pipe', 'date +%s') }}.ldif.gz
           changed_when: false
 
-        - name: Verify slapcat backup is recoverable
+        - name: Verify LDAP backup is recoverable
           shell: |
             f=$(ls -t /mnt/backups/ldap/ldap-test-*.ldif.gz | head -1)
             test -s "$f" || exit 1
@@ -346,7 +344,7 @@
         - name: Assert LDAP backup contains entries
           assert:
             that: "ldap_dn_count.stdout | int >= 4"
-            fail_msg: "LDAP backup has < 4 dn entries (expected admin + 3 users)"
+            fail_msg: "LDAP backup has < 4 dn entries (expected base + 3 users)"
       always:
         - name: Cleanup LDAP backup smoke artifact
           shell: rm -f /mnt/backups/ldap/ldap-test-*.ldif.gz
@@ -959,21 +957,21 @@
           - "'test-server' in audit_hosts_query.stdout"
         fail_msg: "Missing audisp-syslog events from one or more hosts. Got: {{ audit_hosts_query.stdout }}"
 
-# ── Monitoring stack: Node Exporter + Promtail on every host ──
-- name: Test node_exporter + promtail on all hosts
+# ── Monitoring stack: Node Exporter + Promtail containers on every host ──
+- name: Test monitoring agents on all hosts
   hosts: all
   tasks:
-    - name: Check node_exporter running
+    - name: Check secos-agents systemd unit running
       systemd:
-        name: node_exporter
+        name: secos-agents
         state: started
       check_mode: true
-      register: ne_svc
+      register: agents_svc
 
-    - name: Verify node_exporter active
+    - name: Verify secos-agents active
       assert:
-        that: "ne_svc.status.ActiveState == 'active'"
-        fail_msg: "node_exporter not running on {{ inventory_hostname }}"
+        that: "agents_svc.status.ActiveState == 'active'"
+        fail_msg: "secos-agents not running on {{ inventory_hostname }}"
 
     - name: Scrape node_exporter /metrics
       uri:
@@ -981,23 +979,14 @@
         return_content: true
         status_code: 200
       register: ne_metrics
+      retries: 10
+      delay: 3
+      until: ne_metrics.status == 200
 
     - name: Verify node_exporter emits node_* metrics
       assert:
         that: "'node_cpu_seconds_total' in ne_metrics.content"
         fail_msg: "node_exporter /metrics missing node_cpu_seconds_total"
-
-    - name: Check promtail running
-      systemd:
-        name: promtail
-        state: started
-      check_mode: true
-      register: pt_svc
-
-    - name: Verify promtail active
-      assert:
-        that: "pt_svc.status.ActiveState == 'active'"
-        fail_msg: "promtail not running on {{ inventory_hostname }}"
 
     - name: Promtail /ready
       uri:
@@ -1020,21 +1009,21 @@
         that: "pt_metrics.content is search('promtail_sent_bytes_total')"
         fail_msg: "promtail has no promtail_sent_bytes_total metric on {{ inventory_hostname }}"
 
-# ── Monitoring stack: Prometheus / Loki / Grafana on storage-node ──
-- name: Test Prometheus, Loki, Grafana on storage-node
+# ── Monitoring stack: Prometheus / Loki / Grafana containers on storage-node ──
+- name: Test central monitoring stack on storage-node
   hosts: storage
   tasks:
-    - name: Check Prometheus running
+    - name: Check secos-monitoring systemd unit running
       systemd:
-        name: prometheus
+        name: secos-monitoring
         state: started
       check_mode: true
-      register: prom_svc
+      register: mon_svc
 
-    - name: Verify Prometheus active
+    - name: Verify secos-monitoring active
       assert:
-        that: "prom_svc.status.ActiveState == 'active'"
-        fail_msg: "Prometheus not running"
+        that: "mon_svc.status.ActiveState == 'active'"
+        fail_msg: "secos-monitoring not running"
 
     - name: Prometheus /-/healthy
       uri:
@@ -1077,18 +1066,6 @@
              | length) >= 6
         fail_msg: "Prometheus 'node' job missing instances (got {{ prom_targets.json.data.activeTargets | selectattr('labels.job','equalto','node') | map(attribute='labels.instance') | list }})"
 
-    - name: Check Loki running
-      systemd:
-        name: loki
-        state: started
-      check_mode: true
-      register: loki_svc
-
-    - name: Verify Loki active
-      assert:
-        that: "loki_svc.status.ActiveState == 'active'"
-        fail_msg: "Loki not running"
-
     - name: Loki /ready
       uri:
         url: http://127.0.0.1:3100/ready
@@ -1120,18 +1097,6 @@
           - "'test-server' in (loki_hosts.json.data | default([]))"
         fail_msg: "Loki missing hosts. Got: {{ loki_hosts.json.data | default([]) }}"
 
-    - name: Check Grafana running
-      systemd:
-        name: grafana-server
-        state: started
-      check_mode: true
-      register: graf_svc
-
-    - name: Verify Grafana active
-      assert:
-        that: "graf_svc.status.ActiveState == 'active'"
-        fail_msg: "Grafana not running"
-
     - name: Grafana /api/health
       uri:
         url: http://127.0.0.1:3000/api/health
@@ -1147,16 +1112,23 @@
         that: "graf_health.json.database == 'ok'"
         fail_msg: "Grafana database not ok: {{ graf_health.json }}"
 
+    - name: Read Grafana admin password
+      slurp:
+        src: /etc/secos/grafana/admin_password
+      register: graf_admin
+      no_log: true
+
     - name: Grafana datasources are configured
       uri:
         url: http://127.0.0.1:3000/api/datasources
         user: admin
-        password: admin
+        password: "{{ graf_admin.content | b64decode }}"
         force_basic_auth: true
         return_content: true
         status_code: 200
       register: graf_ds
       failed_when: false
+      no_log: true
 
     - name: Verify Prometheus + Loki datasources present (if API reachable)
       assert:

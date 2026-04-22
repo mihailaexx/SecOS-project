@@ -1,0 +1,34 @@
+services:
+  loki:
+    image: ghcr.io/mihailaex/secos-loki:3.7.1
+    container_name: loki
+    hostname: loki
+    restart: on-failure
+    user: "65532:65532"
+    userns_mode: "auto:size=65536"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - label=type:container_t
+    ports:
+      - "127.0.0.1:3100:3100"
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - /etc/secos/loki/config.yml:/etc/loki/config.yml:ro,Z
+      - loki-data:/var/lib/loki:Z
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/loki", "-config.file=/etc/loki/config.yml", "-target=ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: journald
+      options:
+        tag: loki
+
+volumes:
+  loki-data:
+    name: loki-data

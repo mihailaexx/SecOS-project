@@ -1,19 +1,11 @@
 ---
-# Provisioning order: storage → idp → lb → bastions → target
-
-- name: Configure storage-node (NFS + RAID1)
-  hosts: storage
-  roles:
-    - storage
-
-- name: Configure idp-node (Keycloak + OpenLDAP)
-  hosts: idp
-  roles:
-    - idp
+# Provisioning order:
+#   lb bootstrap (sshd management port) → container_runtime all → storage → idp → lb role → bastions → target
 
 # lb-node bootstrap: port 22 → sshd on 2222 → HAProxy takes 22
 # On fresh VM: connects on 22, reconfigures sshd, switches to 2222
 # On re-run: port 2222 already open, bootstrap is skipped
+# Runs FIRST so later `hosts: all` plays can SSH to lb on the inventory-declared port 2222.
 - name: Bootstrap lb-node SSH management port
   hosts: lb
   gather_facts: false
@@ -90,6 +82,21 @@
       delegate_to: localhost
       become: false
 
+- name: Install container runtime on all hosts
+  hosts: all
+  roles:
+    - container_runtime
+
+- name: Configure storage-node (NFS + RAID1)
+  hosts: storage
+  roles:
+    - storage
+
+- name: Configure idp-node (Keycloak + OpenLDAP containers)
+  hosts: idp
+  roles:
+    - idp
+
 - name: Configure lb-node (HAProxy)
   hosts: lb
   roles:
@@ -124,32 +131,16 @@
   roles:
     - logging_client
 
-# ── Monitoring stack ──
-# Node Exporter on all hosts → Prometheus scrapes metrics.
-# Promtail on all hosts → ships journal logs to Loki.
-# Prometheus, Loki, Grafana on storage-node (central dashboard).
+# ── Monitoring stack (containerized) ──
+# monitoring_stack  (storage-node): Prometheus + Loki + Grafana via podman-compose.
+# monitoring_agents (all hosts):    Promtail + Node Exporter via podman-compose.
 
-- name: Deploy Node Exporter on all hosts
+- name: Deploy central monitoring stack on storage-node
+  hosts: storage
+  roles:
+    - monitoring_stack
+
+- name: Deploy monitoring agents on all hosts
   hosts: all
   roles:
-    - node_exporter
-
-- name: Deploy Prometheus on storage-node
-  hosts: storage
-  roles:
-    - prometheus
-
-- name: Deploy Loki on storage-node
-  hosts: storage
-  roles:
-    - loki
-
-- name: Deploy Promtail on all hosts
-  hosts: all
-  roles:
-    - promtail
-
-- name: Deploy Grafana on storage-node
-  hosts: storage
-  roles:
-    - grafana
+    - monitoring_agents

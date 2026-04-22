@@ -97,9 +97,9 @@
     path: /opt/pam-keycloak-oidc
     state: directory
 
-- name: Download pam-keycloak-oidc binary
-  get_url:
-    url: https://github.com/zhaow-de/pam-keycloak-oidc/releases/download/r1.3.0/pam-keycloak-oidc.linux-amd64
+- name: Deploy pam-keycloak-oidc binary (pre-staged on controller)
+  copy:
+    src: "{{ playbook_dir }}/files/cache/pam-keycloak-oidc.linux-amd64"
     dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc
     mode: "0755"
 

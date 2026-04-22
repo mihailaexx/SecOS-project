@@ -1,0 +1,82 @@
+---
+- name: Create /etc/secos config tree
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/secos
+    - /etc/secos/prometheus
+    - /etc/secos/loki
+    - /etc/secos/grafana
+    - /etc/secos/grafana/dashboards
+    - /opt/secos/monitoring
+
+- name: Deploy Prometheus scrape config
+  template:
+    src: prometheus.yml.j2
+    dest: /etc/secos/prometheus/prometheus.yml
+    mode: "0644"
+  notify: restart monitoring
+
+- name: Deploy Loki config
+  copy:
+    src: loki.yml
+    dest: /etc/secos/loki/config.yml
+    mode: "0644"
+  notify: restart monitoring
+
+- name: Deploy Grafana datasources
+  copy:
+    src: datasources.yml
+    dest: /etc/secos/grafana/datasources.yml
+    mode: "0644"
+  notify: restart monitoring
+
+- name: Deploy Grafana dashboards provider
+  copy:
+    src: dashboards-provider.yml
+    dest: /etc/secos/grafana/dashboards-provider.yml
+    mode: "0644"
+  notify: restart monitoring
+
+- name: Deploy Grafana dashboards
+  copy:
+    src: node-overview.json
+    dest: /etc/secos/grafana/dashboards/node-overview.json
+    mode: "0644"
+  notify: restart monitoring
+
+- name: Generate Grafana admin password
+  copy:
+    content: "{{ lookup('password', '/tmp/secos-grafana-admin-password length=24 chars=ascii_letters,digits') }}"
+    dest: /etc/secos/grafana/admin_password
+    owner: root
+    group: root
+    mode: "0400"
+  no_log: true
+
+- name: Deploy compose file
+  copy:
+    src: "{{ playbook_dir }}/../containers/monitoring/compose.yml"
+    dest: /opt/secos/monitoring/compose.yml
+    mode: "0644"
+  notify: restart monitoring
+
+- name: Install monitoring systemd unit
+  copy:
+    src: secos-monitoring.service
+    dest: /etc/systemd/system/secos-monitoring.service
+    mode: "0644"
+  notify:
+    - daemon reload
+    - restart monitoring
+
+- name: Enable and start monitoring stack
+  systemd:
+    name: secos-monitoring
+    enabled: true
+    state: started
+    daemon_reload: true

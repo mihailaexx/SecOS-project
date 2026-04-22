@@ -1,0 +1,9 @@
+---
+- name: daemon reload
+  systemd:
+    daemon_reload: true
+
+- name: restart monitoring
+  systemd:
+    name: secos-monitoring
+    state: restarted

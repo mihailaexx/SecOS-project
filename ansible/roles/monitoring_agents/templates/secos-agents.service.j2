@@ -1,0 +1,19 @@
+[Unit]
+Description=SecOS Monitoring Agents (Promtail + Node Exporter)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=10
+WorkingDirectory=/opt/secos/agents
+EnvironmentFile=/opt/secos/agents/.env
+ExecStartPre=-/usr/bin/podman-compose -f /opt/secos/agents/compose.yml down
+ExecStart=/usr/bin/podman-compose -f /opt/secos/agents/compose.yml up
+ExecStop=/usr/bin/podman-compose -f /opt/secos/agents/compose.yml down
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

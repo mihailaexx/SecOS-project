@@ -3,9 +3,9 @@
   systemd:
     daemon_reload: true
 
-- name: restart keycloak
+- name: restart idp
   systemd:
-    name: keycloak
+    name: secos-idp
     state: restarted
 
 - name: reload firewalld

@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: secos
+    orgId: 1
+    folder: SecOS
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
