@@ -1,0 +1,3 @@
+[Volume]
+VolumeName=loki-data
+Driver=local

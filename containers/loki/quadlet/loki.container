@@ -1,0 +1,27 @@
+[Unit]
+Description=Loki log aggregator (container)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/mihailaexx/secos-loki:3.7.1
+ContainerName=loki
+User=65532:65532
+UserNS=auto:size=65536
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+SecurityLabelType=container_t
+PublishPort=127.0.0.1:3100:3100
+LogDriver=journald
+Volume=/etc/secos/loki/config.yml:/etc/loki/config.yml:ro,Z
+Volume=loki-data:/var/lib/loki:Z
+HealthCmd=["/usr/local/bin/loki", "-config.file=/etc/loki/config.yml", "-target=ready"]
+HealthInterval=30s
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

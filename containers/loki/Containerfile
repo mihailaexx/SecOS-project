@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1.7
+# ---------- stage 1: fetch & verify ----------
+FROM docker.io/library/alpine:3.20 AS fetch
+ARG LOKI_VERSION=3.7.1
+ARG LOKI_SHA256=ef027d63a625d5b74e917b72ae832f187f151e486de15f0515d6af1d6a56aa70
+RUN apk add --no-cache curl unzip ca-certificates \
+ && curl -fsSL -o /tmp/loki.zip \
+      https://github.com/grafana/loki/releases/download/v${LOKI_VERSION}/loki-linux-amd64.zip \
+ && echo "${LOKI_SHA256}  /tmp/loki.zip" | sha256sum -c - \
+ && unzip -j /tmp/loki.zip -d /out \
+ && mv /out/loki-linux-amd64 /out/loki \
+ && chmod 0555 /out/loki
+
+# ---------- stage 2: runtime ----------
+FROM gcr.io/distroless/static-debian12:nonroot
+LABEL org.opencontainers.image.title="secos-loki" \
+      org.opencontainers.image.source="https://github.com/mihailaexx/SecOS-project" \
+      org.opencontainers.image.licenses="AGPL-3.0"
+COPY --from=fetch /out/loki /usr/local/bin/loki
+COPY config/loki.yml /etc/loki/config.yml
+USER 65532:65532
+EXPOSE 3100
+ENTRYPOINT ["/usr/local/bin/loki"]
+CMD ["-config.file=/etc/loki/config.yml"]
