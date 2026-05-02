@@ -8,6 +8,11 @@
       - crun
       - fuse-overlayfs
       - slirp4netns
+      # `acl` (setfacl) is required so ansible can hand off temp files when
+      # `become_user: secos` is used by downstream rootless roles. Without it
+      # ansible falls back to a Solaris-style chmod ACL that GNU coreutils
+      # rejects ("invalid mode: A+user:...:rx:allow").
+      - acl
     state: present
 
 - name: Ensure containers config drop-in dirs exist
@@ -32,3 +37,87 @@
     src: registries-secos.conf
     dest: /etc/containers/registries.conf.d/10-secos.conf
     mode: "0644"
+
+# ── Rootless container runtime user ──────────────────────────────────────────
+# All SecOS container stacks (idp, monitoring_stack, monitoring_agents) run as
+# this dedicated unprivileged user. Linger keeps its systemd user manager alive
+# at boot, so quadlet/compose units start without a login session.
+- name: Create secos rootless container user
+  user:
+    name: secos
+    system: false
+    shell: /bin/bash
+    home: /home/secos
+    create_home: true
+    groups: systemd-journal
+    append: true
+    state: present
+
+- name: Look up secos uid/gid
+  command: id -u secos
+  register: secos_uid_lookup
+  changed_when: false
+
+- name: Set secos_uid fact
+  set_fact:
+    secos_uid: "{{ secos_uid_lookup.stdout | int }}"
+
+# Some Fedora installs don't auto-allocate subuid/subgid for users created by
+# ansible. Allocate explicitly so user namespaces work.
+- name: Ensure subuid range for secos
+  lineinfile:
+    path: /etc/subuid
+    regexp: '^secos:'
+    line: "secos:100000:65536"
+    create: true
+    mode: "0644"
+
+- name: Ensure subgid range for secos
+  lineinfile:
+    path: /etc/subgid
+    regexp: '^secos:'
+    line: "secos:100000:65536"
+    create: true
+    mode: "0644"
+
+- name: Enable linger so secos systemd user manager runs at boot
+  command: loginctl enable-linger secos
+  args:
+    creates: "/var/lib/systemd/linger/secos"
+
+# Rootless containers need to bind low ports (LDAP 389, HTTP 80, HTTPS 443).
+# Drop the unprivileged port floor to 80; SELinux + per-listener capabilities
+# still restrict who can actually bind.
+- name: Allow rootless bind to ports >= 80
+  copy:
+    dest: /etc/sysctl.d/10-secos-rootless-ports.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_unprivileged_port_start=80
+  register: rootless_ports_sysctl
+
+- name: Apply rootless port sysctl
+  command: sysctl --load=/etc/sysctl.d/10-secos-rootless-ports.conf
+  when: rootless_ports_sysctl.changed
+  changed_when: false
+
+- name: Pre-create secos rootless config tree
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: secos
+    group: secos
+    mode: "0755"
+  loop:
+    - /home/secos/.config
+    - /home/secos/.config/containers
+    - /home/secos/.config/systemd
+    - /home/secos/.config/systemd/user
+    - /home/secos/secos
+
+# /run/user/<uid> is created by linger but only after the user manager starts.
+# Wait for it so subsequent role tasks can talk to systemd --user.
+- name: Wait for secos user runtime dir
+  wait_for:
+    path: "/run/user/{{ secos_uid }}/systemd/private"
+    timeout: 30
