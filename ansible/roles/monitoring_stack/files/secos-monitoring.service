@@ -1,19 +1,18 @@
 [Unit]
-Description=SecOS Monitoring Stack (Prometheus + Loki + Grafana)
+Description=SecOS Monitoring Stack (Prometheus + Loki + Grafana, rootless)
 After=network-online.target
 Wants=network-online.target
-Requires=podman.socket
 
 [Service]
 Type=simple
 Restart=on-failure
 RestartSec=10
-WorkingDirectory=/opt/secos/monitoring
-ExecStartPre=-/usr/bin/podman-compose -f /opt/secos/monitoring/compose.yml down
-ExecStart=/usr/bin/podman-compose -f /opt/secos/monitoring/compose.yml up
-ExecStop=/usr/bin/podman-compose -f /opt/secos/monitoring/compose.yml down
+WorkingDirectory=%h/secos/monitoring
+ExecStartPre=-/usr/bin/podman-compose -f %h/secos/monitoring/compose.yml down
+ExecStart=/usr/bin/podman-compose -f %h/secos/monitoring/compose.yml up
+ExecStop=/usr/bin/podman-compose -f %h/secos/monitoring/compose.yml down
 TimeoutStartSec=300
 TimeoutStopSec=60
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

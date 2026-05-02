@@ -4,7 +4,11 @@ services:
     container_name: prometheus
     hostname: prometheus
     restart: on-failure
-    user: "65534:65534"
+    # Rootless: in-container UID 0 maps to host `secos` (unprivileged). Running
+    # as 0:0 lets the process read bind-mounted configs and own the named
+    # volume without subuid/subgid mismatch headaches. Defense-in-depth comes
+    # from cap_drop, read_only, no-new-privileges, and SELinux.
+    user: "0:0"
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -18,7 +22,7 @@ services:
       - --storage.tsdb.retention.time=30d
       - --web.listen-address=0.0.0.0:9090
     volumes:
-      - /etc/secos/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+      - /home/secos/secos/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
       - prometheus-data:/prometheus:Z
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -37,7 +41,7 @@ services:
     container_name: loki
     hostname: loki
     restart: on-failure
-    user: "10001:10001"
+    user: "0:0"
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -47,7 +51,7 @@ services:
       - "3100:3100"
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
-      - /etc/secos/loki/config.yml:/etc/loki/config.yml:ro,Z
+      - /home/secos/secos/monitoring/loki/config.yml:/etc/loki/config.yml:ro,Z
       - loki-data:/var/lib/loki:Z
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -61,7 +65,7 @@ services:
     container_name: grafana
     hostname: grafana
     restart: on-failure
-    user: "472:472"
+    user: "0:0"
     read_only: true
     cap_drop: [ALL]
     security_opt:
@@ -79,9 +83,9 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_SERVER_ROOT_URL: "http://storage-node:3000/"
     volumes:
-      - /etc/secos/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro,Z
-      - /etc/secos/grafana/dashboards-provider.yml:/etc/grafana/provisioning/dashboards/dashboards-provider.yml:ro,Z
-      - /etc/secos/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
+      - /home/secos/secos/monitoring/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro,Z
+      - /home/secos/secos/monitoring/grafana/dashboards-provider.yml:/etc/grafana/provisioning/dashboards/dashboards-provider.yml:ro,Z
+      - /home/secos/secos/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
       - grafana-data:/var/lib/grafana:Z
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -107,4 +111,4 @@ volumes:
 
 secrets:
   grafana_admin:
-    file: /etc/secos/grafana/admin_password
+    file: /home/secos/secos/monitoring/grafana/admin_password

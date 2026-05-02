@@ -1,9 +1,19 @@
 ---
-- name: daemon reload
+- name: daemon reload monitoring
+  become: true
+  become_user: secos
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
   systemd:
     daemon_reload: true
+    scope: user
 
 - name: restart monitoring
+  become: true
+  become_user: secos
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
   systemd:
     name: secos-monitoring
     state: restarted
+    scope: user
