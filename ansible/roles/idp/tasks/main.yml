@@ -213,8 +213,8 @@
   mount:
     path: /mnt/backups
     src: "192.168.56.50:/export/backups"
-    fstype: nfs
-    opts: _netdev,defaults
+    fstype: nfs4
+    opts: _netdev,defaults,security=selinux
     state: mounted
 
 - name: Deploy LDAP backup script

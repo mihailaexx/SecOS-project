@@ -1,4 +1,153 @@
 ---
+# ── SIS#6 fleet-wide SELinux assertions ──
+# Cheap to run, fail fast if any node has slipped to permissive or if the
+# storage labels haven't been pinned. Targets every guest before per-host
+# tests so a misconfigured node surfaces here, not 1k lines later.
+- name: SELinux fleet baseline
+  hosts: all:!hypervisor
+  tasks:
+    - name: getenforce reports Enforcing
+      command: getenforce
+      register: ge
+      changed_when: false
+      failed_when: ge.stdout.strip() != 'Enforcing'
+
+    # Provisioning-time control: the `ansible` SSH user must resolve to
+    # unconfined_u so roles can `semanage`, restorecon, install packages.
+    # Read /etc/selinux/targeted/seusers directly — no tooling required.
+    # Require an EXPLICIT row, not __default__: site.yml pins it via
+    # community.general.selogin, and an explicit row guards against an
+    # upstream Fedora change to __default__'s mapping.
+    - name: Read seusers map
+      slurp:
+        src: /etc/selinux/targeted/seusers
+      register: seusers_file
+
+    - name: Assert ansible → unconfined_u (explicit selogin row)
+      vars:
+        seusers: "{{ seusers_file.content | b64decode }}"
+      assert:
+        that: "seusers is search('(?m)^ansible:unconfined_u:')"
+        fail_msg: "ansible login is not pinned to unconfined_u in seusers:\n{{ seusers }}"
+
+    - name: Assert legacy vagrant account is gone
+      command: getent passwd vagrant
+      register: vagrant_passwd
+      changed_when: false
+      failed_when: vagrant_passwd.rc == 0
+
+    - name: No new AVC denials in the last hour (excluding pam_keycloak_oidc)
+      shell: |
+        set -o pipefail
+        ausearch -m AVC -ts recent 2>/dev/null \
+          | grep -v pam_keycloak_oidc \
+          | grep -E '^type=AVC' || true
+      register: avc_recent
+      changed_when: false
+
+    - name: Assert AVC log clean
+      assert:
+        that: "avc_recent.stdout == ''"
+        fail_msg: "Recent AVC denials present:\n{{ avc_recent.stdout }}"
+
+# ── SIS#6 storage-side label assertions ──
+- name: SELinux storage labels
+  hosts: storage
+  tasks:
+    - name: ls -Zd on exported trees
+      command: ls -Zd /export/home /export/backups
+      register: ls_export
+      changed_when: false
+
+    - name: Assert /export/home → user_home_dir_t and /export/backups → public_content_t
+      assert:
+        that:
+          - "'user_home_dir_t' in ls_export.stdout"
+          - "'public_content_t' in ls_export.stdout"
+        fail_msg: "Storage export labels missing — see ls -Zd output:\n{{ ls_export.stdout }}"
+
+    - name: Per-user home dir labeled user_home_t
+      command: ls -Zd /export/home/m.bulushev
+      register: ls_userhome
+      changed_when: false
+
+    - name: Assert per-user home → user_home_t
+      assert:
+        that: "'user_home_t' in ls_userhome.stdout"
+        fail_msg: "/export/home/m.bulushev not labeled user_home_t: {{ ls_userhome.stdout }}"
+
+    - name: NFS exports advertise security_label
+      command: exportfs -v
+      register: exportfs_v
+      changed_when: false
+
+    - name: Assert security_label on both exports
+      assert:
+        that:
+          - "exportfs_v.stdout is search('/export/home.*security_label')"
+          - "exportfs_v.stdout is search('/export/backups.*security_label')"
+        fail_msg: "NFS exports missing security_label option:\n{{ exportfs_v.stdout }}"
+
+# ── SIS#6 bastion-side login confinement assertions ──
+- name: SELinux login confinement on bastions
+  hosts: bastions
+  tasks:
+    - name: id -Z for m.bulushev
+      command: runuser -u m.bulushev -- id -Z
+      register: id_user
+      changed_when: false
+
+    - name: Assert m.bulushev runs as user_u:user_r:user_t
+      assert:
+        that: "'user_u:user_r:user_t' in id_user.stdout"
+        fail_msg: "m.bulushev not confined to user_t: {{ id_user.stdout }}"
+
+    - name: id -Z for admin1
+      command: runuser -u admin1 -- id -Z
+      register: id_admin
+      changed_when: false
+
+    - name: Assert admin1 runs as staff_u:staff_r:staff_t
+      assert:
+        that: "'staff_u:staff_r:staff_t' in id_admin.stdout"
+        fail_msg: "admin1 not in staff_t shell: {{ id_admin.stdout }}"
+
+    - name: staff_u extended with sysadm_r
+      command: semanage user -l
+      register: seuser_list
+      changed_when: false
+
+    - name: Assert staff_u has both staff_r and sysadm_r
+      assert:
+        that:
+          - "seuser_list.stdout is search('staff_u.*staff_r')"
+          - "seuser_list.stdout is search('staff_u.*sysadm_r')"
+        fail_msg: "staff_u missing sysadm_r — admins cannot sudo into sysadm_t"
+
+    - name: backup mount carries security=selinux
+      command: findmnt -n -o OPTIONS /mnt/backups
+      register: mnt_opts
+      changed_when: false
+
+    - name: Assert security=selinux on /mnt/backups
+      assert:
+        that: "'security=selinux' in mnt_opts.stdout"
+        fail_msg: "/mnt/backups missing security=selinux: {{ mnt_opts.stdout }}"
+
+# ── SIS#6 test-server DBA confinement ──
+- name: SELinux DBA confinement on test-server
+  hosts: target
+  tasks:
+    - name: id -Z for dba1
+      command: runuser -u dba1 -- id -Z
+      register: id_dba
+      changed_when: false
+
+    - name: Assert dba1 runs as staff_u:staff_r:staff_t
+      assert:
+        that: "'staff_u:staff_r:staff_t' in id_dba.stdout"
+        fail_msg: "dba1 not in staff_t shell: {{ id_dba.stdout }}"
+
 # ── Storage node tests ──
 - name: Test storage-node
   hosts: storage

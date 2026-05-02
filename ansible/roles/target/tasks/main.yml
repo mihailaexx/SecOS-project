@@ -1,4 +1,21 @@
 ---
+# ── SELinux user mapping for DBA accounts ──
+# dba1 lands in staff_u; the global play already extends staff_u with
+# sysadm_r, so `sudo -i` on test-server gives the DBA a sysadm_t shell.
+- name: Install SELinux management tools
+  dnf:
+    name:
+      - python3-libselinux
+      - python3-libsemanage
+      - policycoreutils-python-utils
+    state: present
+
+- name: Map dba1 login to staff_u
+  community.general.selogin:
+    login: dba1
+    seuser: staff_u
+    state: present
+
 # ── Dedicated disk for PostgreSQL data ──
 - name: Install xfsprogs
   dnf:
@@ -88,8 +105,8 @@
   mount:
     path: /mnt/backups
     src: "192.168.56.50:/export/backups"
-    fstype: nfs
-    opts: _netdev,defaults
+    fstype: nfs4
+    opts: _netdev,defaults,security=selinux
     state: mounted
 
 - name: Daily PostgreSQL backup cron

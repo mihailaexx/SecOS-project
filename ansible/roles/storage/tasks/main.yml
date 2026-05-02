@@ -6,6 +6,9 @@
       - mdadm
       - cronie
       - xfsprogs
+      - policycoreutils-python-utils
+      - python3-libselinux
+      - python3-libsemanage
     state: present
 
 - name: Create RAID1 array from sdb + sdc
@@ -68,6 +71,26 @@
     owner: "26"
     group: "26"
     mode: "0755"
+
+# ── SELinux file contexts on exported trees ──
+# Pin labels so SELinux blocks cross-service access even if DAC is subverted.
+# Bastions inherit these labels via NFSv4 security_label (see exports.j2 +
+# autofs/mount opts on the clients).
+- name: Pin SELinux file contexts on /export trees
+  community.general.sefcontext:
+    target: "{{ item.target }}"
+    setype: "{{ item.setype }}"
+    state: present
+  loop:
+    - { target: '/export/home(/.*)?',        setype: user_home_dir_t }
+    - { target: '/export/home/[^/]+/.*',     setype: user_home_t }
+    - { target: '/export/backups(/.*)?',     setype: public_content_t }
+  register: storage_fcontext
+
+- name: Apply file contexts to existing files
+  command: restorecon -RFv /export/home /export/backups
+  when: storage_fcontext.changed
+  changed_when: true
 
 - name: Configure NFS exports
   template:

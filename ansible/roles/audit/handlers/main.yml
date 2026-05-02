@@ -1,8 +1,9 @@
 ---
-# auditd is PID-1 managed on Fedora and ignores systemctl restart.
-# Use its own service-reload path for plugins, and augenrules for rules.
+# auditd refuses systemctl restart and the legacy `service auditd restart`
+# wrapper times out on Fedora. SIGHUP makes auditd reread auditd.conf and
+# reload plugins.d/, which is what we actually need when those files change.
 - name: restart auditd
-  command: /usr/sbin/service auditd restart
+  command: /usr/sbin/service auditd reload
   changed_when: true
 
 - name: reload audit rules

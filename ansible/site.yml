@@ -82,6 +82,69 @@
       delegate_to: localhost
       become: false
 
+# Pin SELinux to enforcing on every guest before any role runs. Fedora's
+# default is enforcing, but a relabeled-permissive image would silently slip
+# past the rest of the playbook — fail fast here instead.
+- name: Pin SELinux mode to enforcing
+  hosts: all:!hypervisor
+  tasks:
+    - name: Install SELinux management tools
+      dnf:
+        name:
+          - python3-libselinux
+          - python3-libsemanage
+          - policycoreutils-python-utils
+        state: present
+
+    - name: Set SELinux to enforcing (targeted policy)
+      ansible.posix.selinux:
+        policy: targeted
+        state: enforcing
+
+    # Provisioning account must run unconfined so roles can `semanage`,
+    # restorecon, install packages, etc. Explicit row beats __default__
+    # so the test asserts identity, not the fallback.
+    - name: Pin ansible provisioning account to unconfined_u
+      community.general.selogin:
+        login: ansible
+        seuser: unconfined_u
+        state: present
+
+    # Drop the legacy vagrant selogin row (and the user itself) on hosts
+    # that were originally provisioned with the old surrogate account.
+    # Idempotent: no-ops once vagrant is gone.
+    - name: Remove legacy vagrant selogin row
+      community.general.selogin:
+        login: vagrant
+        state: absent
+      failed_when: false
+
+    - name: Remove legacy vagrant user
+      user:
+        name: vagrant
+        state: absent
+        remove: true
+        force: true
+      failed_when: false
+
+    # Extend staff_u with sysadm_r everywhere so any host that later maps a
+    # human account to staff_u (admin1 on bastions, dba1 on test-server) can
+    # `sudo -i` into a sysadm_t shell. Idempotent; tolerates "already" stderr.
+    - name: Extend staff_u with sysadm_r role
+      command: semanage user -m -R 'staff_r sysadm_r' staff_u
+      register: seuser_staff
+      changed_when: seuser_staff.rc == 0
+      failed_when:
+        - seuser_staff.rc != 0
+        - "'already' not in seuser_staff.stderr"
+      check_mode: false
+
+    - name: Assert SELinux is currently enforcing
+      command: getenforce
+      register: getenforce_out
+      changed_when: false
+      failed_when: getenforce_out.stdout.strip() != 'Enforcing'
+
 - name: Install container runtime on all hosts
   hosts: all:!hypervisor
   roles:

@@ -3,11 +3,23 @@ hostname: ${hostname}
 fqdn: ${hostname}.secos.local
 manage_etc_hosts: true
 
-user: vagrant
-password: vagrant
-chpasswd:
-  expire: false
-ssh_pwauth: true
+# Provisioning account: key-only, passwordless sudo, no password auth.
+# Replaces the historical "vagrant" surrogate; explicit name reflects the
+# account's actual role (Ansible automation), and removing password auth
+# closes the lab's biggest auth weakness.
+users:
+  - name: ansible
+    # /var/lib avoids autofs collisions on bastions, where /home is NFS-mounted
+    # for human accounts. Same pattern as the secos rootless user.
+    homedir: /var/lib/ansible
+    groups: wheel
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFOIpYhfWMdiop1hFGc0SBbLIzKhtMK3GvV6T449ju6t mikhailaex@fedora
+ssh_pwauth: false
+disable_root: true
 
 packages:
   - cloud-utils-growpart
@@ -36,5 +48,3 @@ power_state:
   delay: 0
   message: "Rebooting to activate audit=1"
 
-ssh_authorized_keys:
-  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFOIpYhfWMdiop1hFGc0SBbLIzKhtMK3GvV6T449ju6t mikhailaex@fedora

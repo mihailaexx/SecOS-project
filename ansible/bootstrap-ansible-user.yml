@@ -1,0 +1,77 @@
+---
+# One-shot migration: create the `ansible` provisioning account on hosts
+# that were originally provisioned with the legacy `vagrant` surrogate.
+# Run ONCE with the old credentials, then the regular inventory takes over:
+#
+#   ansible-playbook bootstrap-ansible-user.yml \
+#     -i inventory/hosts.ini \
+#     -e ansible_user=vagrant -e ansible_password=vagrant
+#
+# After this completes, `site.yml` runs as `ansible` via inventory defaults.
+# Re-running the playbook later is a no-op (idempotent).
+- name: Create ansible provisioning account
+  hosts: all:!hypervisor
+  tasks:
+    - name: Ensure wheel group exists
+      group:
+        name: wheel
+        state: present
+
+    - name: Create ansible user (key auth, NOPASSWD sudo)
+      user:
+        name: ansible
+        # /var/lib avoids autofs collisions on bastions where /home is NFS.
+        home: /var/lib/ansible
+        create_home: true
+        groups: wheel
+        shell: /bin/bash
+        password_lock: true
+        state: present
+
+    - name: Authorize provisioning SSH key for ansible
+      authorized_key:
+        user: ansible
+        key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+        state: present
+
+    - name: Grant passwordless sudo to ansible
+      copy:
+        dest: /etc/sudoers.d/ansible
+        content: "ansible ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+# Bastions enforce OIDC keyboard-interactive globally and previously had a
+# password Match block for vagrant. The new drop-in keeps the OIDC default
+# but switches the provisioning bypass to PubkeyAuthentication for `ansible`.
+# We push it here (during bootstrap) so subsequent site.yml runs can connect
+# as `ansible` via key auth — otherwise sshd would reject pubkey for the
+# new user under the existing config.
+- name: Update bastion sshd drop-in for ansible pubkey bypass
+  hosts: bastions
+  tasks:
+    - name: Deploy sshd bastion auth drop-in (ansible bypass via pubkey)
+      template:
+        src: roles/bastion/templates/40-bastion-auth.conf.j2
+        dest: /etc/ssh/sshd_config.d/40-bastion-auth.conf
+        owner: root
+        group: root
+        mode: "0644"
+      register: sshd_dropin
+
+    - name: Fix SELinux context on sshd drop-in
+      command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
+      changed_when: false
+
+    - name: Validate sshd config before restart
+      command: sshd -t
+      changed_when: false
+      when: sshd_dropin.changed
+
+    - name: Restart sshd to activate ansible pubkey auth
+      systemd:
+        name: sshd
+        state: restarted
+      when: sshd_dropin.changed

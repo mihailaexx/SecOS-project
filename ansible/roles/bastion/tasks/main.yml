@@ -15,7 +15,7 @@
       - make
     state: present
 
-# ── SSHD config (deploy FIRST to keep vagrant auth alive through authselect) ──
+# ── SSHD config (deploy FIRST to keep ansible auth alive through authselect) ──
 - name: Deploy sshd bastion auth drop-in
   template:
     src: 40-bastion-auth.conf.j2
@@ -31,7 +31,7 @@
   changed_when: false
   when: sshd_dropin.changed
 
-- name: Restart sshd to activate vagrant auth early
+- name: Restart sshd to activate ansible auth early
   systemd:
     name: sshd
     state: restarted
@@ -203,6 +203,19 @@
     shell: /bin/bash
     create_home: false
 
+# ── SELinux user / role mapping for human accounts on bastions ──
+# m.bulushev → user_u (user_r only, cannot reach sysadm_r even via sudo)
+# admin1     → staff_u (the global play extends staff_u with sysadm_r,
+#              so `sudo -i` lands in sysadm_t)
+- name: Map bastion logins to SELinux users
+  community.general.selogin:
+    login: "{{ item.login }}"
+    seuser: "{{ item.seuser }}"
+    state: present
+  loop:
+    - { login: m.bulushev, seuser: user_u }
+    - { login: admin1,     seuser: staff_u }
+
 # ── Sudoers ──
 - name: Deploy bastion-admins sudoers
   copy:
@@ -244,8 +257,8 @@
   mount:
     path: /mnt/backups
     src: "192.168.56.50:/export/backups"
-    fstype: nfs
-    opts: _netdev,defaults
+    fstype: nfs4
+    opts: _netdev,defaults,security=selinux
     state: mounted
 
 - name: Daily config backup cron
