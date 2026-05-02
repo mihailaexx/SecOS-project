@@ -23,7 +23,11 @@ services:
       - --web.listen-address=0.0.0.0:9090
     volumes:
       - /var/lib/secos/secos/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
-      - prometheus-data:/prometheus:Z
+      # :U chowns the volume to match `user: "0:0"`. Without this, podman
+      # copies the image's prometheus user (uid 65534, mapped to subuid
+      # 165533 on host) and the rootless container — running as uid 0 in
+      # the user namespace — gets EACCES on /prometheus/queries.active.
+      - prometheus-data:/prometheus:Z,U
     tmpfs:
       - /tmp:size=64m,mode=1777
     healthcheck:
@@ -52,7 +56,7 @@ services:
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - /var/lib/secos/secos/monitoring/loki/config.yml:/etc/loki/config.yml:ro,Z
-      - loki-data:/var/lib/loki:Z
+      - loki-data:/var/lib/loki:Z,U
     tmpfs:
       - /tmp:size=64m,mode=1777
     logging:
@@ -86,11 +90,13 @@ services:
       - /var/lib/secos/secos/monitoring/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro,Z
       - /var/lib/secos/secos/monitoring/grafana/dashboards-provider.yml:/etc/grafana/provisioning/dashboards/dashboards-provider.yml:ro,Z
       - /var/lib/secos/secos/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
-      - grafana-data:/var/lib/grafana:Z
+      - grafana-data:/var/lib/grafana:Z,U
+      # Mount the admin password as a regular bind with :Z so SELinux relabels
+      # to container_file_t. podman-compose's `secrets` translates to a plain
+      # bind without :Z, leaving the host file as var_lib_t and tripping AVCs.
+      - /var/lib/secos/secos/monitoring/grafana/admin_password:/run/secrets/grafana_admin:ro,Z
     tmpfs:
       - /tmp:size=64m,mode=1777
-    secrets:
-      - grafana_admin
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
@@ -108,7 +114,3 @@ volumes:
     name: loki-data
   grafana-data:
     name: grafana-data
-
-secrets:
-  grafana_admin:
-    file: /var/lib/secos/secos/monitoring/grafana/admin_password
