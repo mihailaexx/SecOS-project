@@ -1,44 +1,78 @@
 ---
-- name: Create config tree
+# Runs as the unprivileged `secos` user. promtail reads systemd journals via
+# secos's membership in the `systemd-journal` group (set up in container_runtime).
+# Caveat: node-exporter loses a few host-PID-only collectors (e.g. mountinfo
+# from /host/proc/1) because the rootless user namespace can't ptrace PID 1.
+# Filesystem-size metrics from the container's own /proc still work; per-pid
+# host metrics do not.
+
+- name: Remove legacy rootful agents unit
+  systemd:
+    name: secos-agents
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove legacy rootful agents unit file
+  file:
+    path: /etc/systemd/system/secos-agents.service
+    state: absent
+
+- name: Remove legacy /etc/secos agents config tree
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/secos/promtail
+    - /opt/secos/agents
+
+- name: Create rootless agents config tree under secos $HOME
   file:
     path: "{{ item }}"
     state: directory
-    owner: root
-    group: root
+    owner: secos
+    group: secos
     mode: "0755"
   loop:
-    - /etc/secos
-    - /etc/secos/promtail
-    - /opt/secos/agents
+    - /home/secos/secos/agents
+    - /home/secos/secos/agents/promtail
 
 - name: Deploy Promtail config
   template:
     src: promtail-config.yml.j2
-    dest: /etc/secos/promtail/config.yml
+    dest: /home/secos/secos/agents/promtail/config.yml
+    owner: secos
+    group: secos
     mode: "0644"
   notify: restart agents
 
 - name: Deploy compose file
   copy:
     src: "{{ playbook_dir }}/../containers/agents/compose.yml"
-    dest: /opt/secos/agents/compose.yml
+    dest: /home/secos/secos/agents/compose.yml
+    owner: secos
+    group: secos
     mode: "0644"
   notify: restart agents
 
 - name: Deploy compose env file
   template:
     src: agents.env.j2
-    dest: /opt/secos/agents/.env
+    dest: /home/secos/secos/agents/.env
+    owner: secos
+    group: secos
     mode: "0644"
   notify: restart agents
 
-- name: Install agents systemd unit
+- name: Install agents systemd user unit
   template:
     src: secos-agents.service.j2
-    dest: /etc/systemd/system/secos-agents.service
+    dest: /home/secos/.config/systemd/user/secos-agents.service
+    owner: secos
+    group: secos
     mode: "0644"
   notify:
-    - daemon reload
+    - daemon reload agents
     - restart agents
 
 - name: Gather service facts (for firewalld detection)
@@ -55,9 +89,14 @@
   changed_when: false
   when: ansible_facts.services['firewalld.service'].state | default('stopped') == 'running'
 
-- name: Enable and start agents stack
+- name: Enable and start agents stack (rootless)
+  become: true
+  become_user: secos
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
   systemd:
     name: secos-agents
     enabled: true
     state: started
+    scope: user
     daemon_reload: true

@@ -8,10 +8,15 @@ services:
     pid: host
     read_only: true
     cap_drop: [ALL]
+    # node-exporter's filesystem/proc collectors traverse /proc/<pid>/ on the
+    # host PID namespace. Rootless caveat: in-container UID 0 maps to host
+    # `secos` (unprivileged), so ptrace_may_access() against PID 1 (root) fails
+    # and a few host-PID-only collectors silently skip — filesystem-size and
+    # most /proc/sys metrics still work, per-host-pid metrics do not.
     security_opt:
       - no-new-privileges:true
-      - label=type:container_t
-    user: "65534:65534"
+      - label=disable
+    user: "0:0"
     command:
       - --path.procfs=/host/proc
       - --path.sysfs=/host/sys
@@ -42,10 +47,11 @@ services:
     network_mode: host
     read_only: true
     cap_drop: [ALL]
-    cap_add: [DAC_READ_SEARCH]
-    # Promtail reads journald (syslogd_var_run_t, var_log_t), which container_t
+    # Promtail reads journald (var_log_t / syslogd_var_run_t), which container_t
     # is denied. Disable SELinux confinement on this container — it is a trusted
-    # log shipper whose whole purpose is reading host logs.
+    # log shipper whose whole purpose is reading host logs. Under rootless,
+    # cap_add is unobtainable (the calling user has no caps), so journal access
+    # comes from secos's `systemd-journal` group membership instead.
     security_opt:
       - no-new-privileges:true
       - label=disable
@@ -55,7 +61,7 @@ services:
       HOSTNAME: "${HOSTNAME}"
       LOKI_URL: "${LOKI_URL:-http://192.168.56.50:3100/loki/api/v1/push}"
     volumes:
-      - /etc/secos/promtail/config.yml:/etc/promtail/config.yml:ro,Z
+      - /home/secos/secos/agents/promtail/config.yml:/etc/promtail/config.yml:ro,Z
       - /var/log/journal:/var/log/journal:ro
       - /run/log/journal:/run/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
