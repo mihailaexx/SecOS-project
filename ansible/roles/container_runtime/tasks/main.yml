@@ -47,8 +47,9 @@
     name: secos
     system: false
     shell: /bin/bash
-    home: /home/secos
+    home: /var/lib/secos
     create_home: true
+    move_home: true
     groups: systemd-journal
     append: true
     state: present
@@ -109,11 +110,11 @@
     group: secos
     mode: "0755"
   loop:
-    - /home/secos/.config
-    - /home/secos/.config/containers
-    - /home/secos/.config/systemd
-    - /home/secos/.config/systemd/user
-    - /home/secos/secos
+    - /var/lib/secos/.config
+    - /var/lib/secos/.config/containers
+    - /var/lib/secos/.config/systemd
+    - /var/lib/secos/.config/systemd/user
+    - /var/lib/secos/secos
 
 # /run/user/<uid> is created by linger but only after the user manager starts.
 # Wait for it so subsequent role tasks can talk to systemd --user.

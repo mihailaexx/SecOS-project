@@ -21,7 +21,7 @@ services:
       LDAP_CUSTOM_LDIF_DIR: /ldifs
       LDAP_SKIP_DEFAULT_TREE: "yes"
     volumes:
-      - /home/secos/secos/idp/openldap/ldifs:/ldifs:ro,Z
+      - /var/lib/secos/secos/idp/openldap/ldifs:/ldifs:ro,Z
       - openldap-data:/bitnami/openldap:Z
     healthcheck:
       test: ["CMD-SHELL", "ldapsearch -H ldap://127.0.0.1:1389 -x -b 'dc=bastion,dc=local' -s base >/dev/null"]
@@ -62,7 +62,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
     command: ["start-dev", "--import-realm"]
     volumes:
-      - /home/secos/secos/idp/keycloak/import:/opt/keycloak/data/import:ro,Z
+      - /var/lib/secos/secos/idp/keycloak/import:/opt/keycloak/data/import:ro,Z
       - keycloak-data:/opt/keycloak/data:Z
     tmpfs:
       - /tmp:size=128m,mode=1777

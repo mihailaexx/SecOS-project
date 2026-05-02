@@ -34,13 +34,13 @@
     group: secos
     mode: "0755"
   loop:
-    - /home/secos/secos/agents
-    - /home/secos/secos/agents/promtail
+    - /var/lib/secos/secos/agents
+    - /var/lib/secos/secos/agents/promtail
 
 - name: Deploy Promtail config
   template:
     src: promtail-config.yml.j2
-    dest: /home/secos/secos/agents/promtail/config.yml
+    dest: /var/lib/secos/secos/agents/promtail/config.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -49,7 +49,7 @@
 - name: Deploy compose file
   copy:
     src: "{{ playbook_dir }}/../containers/agents/compose.yml"
-    dest: /home/secos/secos/agents/compose.yml
+    dest: /var/lib/secos/secos/agents/compose.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -58,7 +58,7 @@
 - name: Deploy compose env file
   template:
     src: agents.env.j2
-    dest: /home/secos/secos/agents/.env
+    dest: /var/lib/secos/secos/agents/.env
     owner: secos
     group: secos
     mode: "0644"
@@ -67,7 +67,7 @@
 - name: Install agents systemd user unit
   template:
     src: secos-agents.service.j2
-    dest: /home/secos/.config/systemd/user/secos-agents.service
+    dest: /var/lib/secos/.config/systemd/user/secos-agents.service
     owner: secos
     group: secos
     mode: "0644"

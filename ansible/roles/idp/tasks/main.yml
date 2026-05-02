@@ -60,11 +60,11 @@
     group: secos
     mode: "0755"
   loop:
-    - /home/secos/secos/idp
-    - /home/secos/secos/idp/openldap
-    - /home/secos/secos/idp/openldap/ldifs
-    - /home/secos/secos/idp/keycloak
-    - /home/secos/secos/idp/keycloak/import
+    - /var/lib/secos/secos/idp
+    - /var/lib/secos/secos/idp/openldap
+    - /var/lib/secos/secos/idp/openldap/ldifs
+    - /var/lib/secos/secos/idp/keycloak
+    - /var/lib/secos/secos/idp/keycloak/import
 
 - name: Create root-owned operator paths
   file:
@@ -81,7 +81,7 @@
 - name: Deploy OpenLDAP LDIF (container-compatible)
   copy:
     src: ldap-container.ldif
-    dest: /home/secos/secos/idp/openldap/ldifs/01-users.ldif
+    dest: /var/lib/secos/secos/idp/openldap/ldifs/01-users.ldif
     owner: secos
     group: secos
     mode: "0644"
@@ -90,7 +90,7 @@
 - name: Generate OpenLDAP admin password
   copy:
     content: "admin\n"
-    dest: /home/secos/secos/idp/openldap/admin_password
+    dest: /var/lib/secos/secos/idp/openldap/admin_password
     owner: secos
     group: secos
     mode: "0400"
@@ -100,7 +100,7 @@
 - name: Deploy Keycloak realm import
   template:
     src: bastion-realm.json.j2
-    dest: /home/secos/secos/idp/keycloak/import/bastion-realm.json
+    dest: /var/lib/secos/secos/idp/keycloak/import/bastion-realm.json
     owner: secos
     group: secos
     mode: "0644"
@@ -109,7 +109,7 @@
 - name: Generate Keycloak admin password
   copy:
     content: "{{ lookup('password', '/tmp/secos-keycloak-admin-password length=24 chars=ascii_letters,digits') }}"
-    dest: /home/secos/secos/idp/keycloak/admin_password
+    dest: /var/lib/secos/secos/idp/keycloak/admin_password
     owner: secos
     group: secos
     mode: "0400"
@@ -119,7 +119,7 @@
 - name: Deploy IdP compose file
   copy:
     src: "{{ playbook_dir }}/../containers/idp/compose.yml"
-    dest: /home/secos/secos/idp/compose.yml
+    dest: /var/lib/secos/secos/idp/compose.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -128,7 +128,7 @@
 - name: Install IdP systemd user unit
   copy:
     src: secos-idp.service
-    dest: /home/secos/.config/systemd/user/secos-idp.service
+    dest: /var/lib/secos/.config/systemd/user/secos-idp.service
     owner: secos
     group: secos
     mode: "0644"
@@ -239,8 +239,8 @@
       mkdir -p /mnt/backups/keycloak
       DATE=$(date +%F)
       sudo -iu secos /usr/bin/podman exec keycloak /opt/keycloak/bin/kc.sh export --dir /tmp/kc-export --realm bastion
-      sudo -iu secos /usr/bin/podman cp keycloak:/tmp/kc-export /home/secos/kc-export-$DATE
-      mv /home/secos/kc-export-$DATE /mnt/backups/keycloak/$DATE
+      sudo -iu secos /usr/bin/podman cp keycloak:/tmp/kc-export /var/lib/secos/kc-export-$DATE
+      mv /var/lib/secos/kc-export-$DATE /mnt/backups/keycloak/$DATE
       sudo -iu secos /usr/bin/podman exec keycloak rm -rf /tmp/kc-export
       find /mnt/backups/keycloak/ -maxdepth 1 -mindepth 1 -type d -mtime +7 -exec rm -rf {} +
 

@@ -1,5 +1,5 @@
 ## idp-node — Keycloak + OpenLDAP (rootless containers under secos)
--w /home/secos/secos/idp/keycloak/  -p wa -k keycloak_cfg
--w /home/secos/secos/idp/openldap/  -p wa -k ldap_cfg
--w /home/secos/secos/idp/compose.yml -p wa -k idp_compose
--w /home/secos/.config/systemd/user/secos-idp.service -p wa -k idp_unit
+-w /var/lib/secos/secos/idp/keycloak/  -p wa -k keycloak_cfg
+-w /var/lib/secos/secos/idp/openldap/  -p wa -k ldap_cfg
+-w /var/lib/secos/secos/idp/compose.yml -p wa -k idp_compose
+-w /var/lib/secos/.config/systemd/user/secos-idp.service -p wa -k idp_unit

@@ -22,7 +22,7 @@ services:
       - --storage.tsdb.retention.time=30d
       - --web.listen-address=0.0.0.0:9090
     volumes:
-      - /home/secos/secos/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+      - /var/lib/secos/secos/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
       - prometheus-data:/prometheus:Z
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -51,7 +51,7 @@ services:
       - "3100:3100"
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
-      - /home/secos/secos/monitoring/loki/config.yml:/etc/loki/config.yml:ro,Z
+      - /var/lib/secos/secos/monitoring/loki/config.yml:/etc/loki/config.yml:ro,Z
       - loki-data:/var/lib/loki:Z
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -83,9 +83,9 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_SERVER_ROOT_URL: "http://storage-node:3000/"
     volumes:
-      - /home/secos/secos/monitoring/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro,Z
-      - /home/secos/secos/monitoring/grafana/dashboards-provider.yml:/etc/grafana/provisioning/dashboards/dashboards-provider.yml:ro,Z
-      - /home/secos/secos/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
+      - /var/lib/secos/secos/monitoring/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro,Z
+      - /var/lib/secos/secos/monitoring/grafana/dashboards-provider.yml:/etc/grafana/provisioning/dashboards/dashboards-provider.yml:ro,Z
+      - /var/lib/secos/secos/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
       - grafana-data:/var/lib/grafana:Z
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -111,4 +111,4 @@ volumes:
 
 secrets:
   grafana_admin:
-    file: /home/secos/secos/monitoring/grafana/admin_password
+    file: /var/lib/secos/secos/monitoring/grafana/admin_password

@@ -1,6 +1,6 @@
 ---
 # Runs as the unprivileged `secos` user provisioned by container_runtime.
-# All state lives under /home/secos/secos/monitoring/ so podman storage,
+# All state lives under /var/lib/secos/secos/monitoring/ so podman storage,
 # bind-mounted configs, and the systemd user unit share one ownership domain.
 
 - name: Remove legacy rootful monitoring unit (if upgrading from previous deploy)
@@ -33,16 +33,16 @@
     group: secos
     mode: "0755"
   loop:
-    - /home/secos/secos/monitoring
-    - /home/secos/secos/monitoring/prometheus
-    - /home/secos/secos/monitoring/loki
-    - /home/secos/secos/monitoring/grafana
-    - /home/secos/secos/monitoring/grafana/dashboards
+    - /var/lib/secos/secos/monitoring
+    - /var/lib/secos/secos/monitoring/prometheus
+    - /var/lib/secos/secos/monitoring/loki
+    - /var/lib/secos/secos/monitoring/grafana
+    - /var/lib/secos/secos/monitoring/grafana/dashboards
 
 - name: Deploy Prometheus scrape config
   template:
     src: prometheus.yml.j2
-    dest: /home/secos/secos/monitoring/prometheus/prometheus.yml
+    dest: /var/lib/secos/secos/monitoring/prometheus/prometheus.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -51,7 +51,7 @@
 - name: Deploy Loki config
   copy:
     src: loki.yml
-    dest: /home/secos/secos/monitoring/loki/config.yml
+    dest: /var/lib/secos/secos/monitoring/loki/config.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -60,7 +60,7 @@
 - name: Deploy Grafana datasources
   copy:
     src: datasources.yml
-    dest: /home/secos/secos/monitoring/grafana/datasources.yml
+    dest: /var/lib/secos/secos/monitoring/grafana/datasources.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -69,7 +69,7 @@
 - name: Deploy Grafana dashboards provider
   copy:
     src: dashboards-provider.yml
-    dest: /home/secos/secos/monitoring/grafana/dashboards-provider.yml
+    dest: /var/lib/secos/secos/monitoring/grafana/dashboards-provider.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -78,7 +78,7 @@
 - name: Deploy Grafana dashboards
   copy:
     src: node-overview.json
-    dest: /home/secos/secos/monitoring/grafana/dashboards/node-overview.json
+    dest: /var/lib/secos/secos/monitoring/grafana/dashboards/node-overview.json
     owner: secos
     group: secos
     mode: "0644"
@@ -87,7 +87,7 @@
 - name: Generate Grafana admin password
   copy:
     content: "{{ lookup('password', '/tmp/secos-grafana-admin-password length=24 chars=ascii_letters,digits') }}"
-    dest: /home/secos/secos/monitoring/grafana/admin_password
+    dest: /var/lib/secos/secos/monitoring/grafana/admin_password
     owner: secos
     group: secos
     mode: "0400"
@@ -96,7 +96,7 @@
 - name: Deploy compose file
   copy:
     src: "{{ playbook_dir }}/../containers/monitoring/compose.yml"
-    dest: /home/secos/secos/monitoring/compose.yml
+    dest: /var/lib/secos/secos/monitoring/compose.yml
     owner: secos
     group: secos
     mode: "0644"
@@ -105,7 +105,7 @@
 - name: Install monitoring systemd user unit
   copy:
     src: secos-monitoring.service
-    dest: /home/secos/.config/systemd/user/secos-monitoring.service
+    dest: /var/lib/secos/.config/systemd/user/secos-monitoring.service
     owner: secos
     group: secos
     mode: "0644"
