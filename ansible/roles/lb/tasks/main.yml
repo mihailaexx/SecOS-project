@@ -60,7 +60,7 @@
     path: /mnt/backups
     src: "192.168.56.50:/export/backups"
     fstype: nfs4
-    opts: _netdev,defaults,security=selinux
+    opts: _netdev,defaults
     state: mounted
 
 - name: Daily config backup cron

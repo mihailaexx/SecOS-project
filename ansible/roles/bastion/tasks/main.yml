@@ -41,6 +41,18 @@
   meta: reset_connection
   when: sshd_dropin.changed
 
+# ── Disable systemd-homed ──
+# We use autofs + NFSv4 for human home dirs; systemd-homed isn't involved
+# but Fedora ships it active by default, where it polls /home and trips
+# AVC denials against the autofs filesystem (systemd_homed_t → autofs_t).
+# Mask rather than just disable so it can't be reactivated by a unit alias.
+- name: Mask systemd-homed (replaced by autofs+NFS for human homes)
+  systemd:
+    name: systemd-homed
+    enabled: false
+    masked: true
+    state: stopped
+
 # ── AutoFS for NFS home directories ──
 - name: Deploy autofs master config
   copy:
@@ -258,7 +270,7 @@
     path: /mnt/backups
     src: "192.168.56.50:/export/backups"
     fstype: nfs4
-    opts: _netdev,defaults,security=selinux
+    opts: _netdev,defaults
     state: mounted
 
 - name: Daily config backup cron

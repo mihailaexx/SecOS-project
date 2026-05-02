@@ -1,1 +1,1 @@
-* -fstype=nfs4,rw,sync,security=selinux 192.168.56.50:/export/home/&
+* -fstype=nfs4,rw,sync 192.168.56.50:/export/home/&

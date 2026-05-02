@@ -10,6 +10,25 @@
       - policycoreutils-python-utils
     state: present
 
+# dba1 must exist locally so peer-auth into PostgreSQL works AND so the
+# SELinux selogin row below has a Linux user to attach to. UID/gid pinned
+# to match the bastion-side definition (NFS-friendly even though this host
+# doesn't mount /export/home).
+- name: Ensure dba group exists
+  group:
+    name: dba
+    gid: 2002
+    state: present
+
+- name: Create local dba1 user
+  user:
+    name: dba1
+    uid: 1003
+    group: dba
+    shell: /bin/bash
+    create_home: false
+    state: present
+
 - name: Map dba1 login to staff_u
   community.general.selogin:
     login: dba1
@@ -106,7 +125,7 @@
     path: /mnt/backups
     src: "192.168.56.50:/export/backups"
     fstype: nfs4
-    opts: _netdev,defaults,security=selinux
+    opts: _netdev,defaults
     state: mounted
 
 - name: Daily PostgreSQL backup cron
