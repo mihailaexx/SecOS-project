@@ -1,5 +1,5 @@
 [Unit]
-Description=SecOS IdP (OpenLDAP + Keycloak)
+Description=SecOS IdP (OpenLDAP + Keycloak, rootless)
 After=network-online.target
 Wants=network-online.target
 
@@ -7,12 +7,12 @@ Wants=network-online.target
 Type=simple
 Restart=on-failure
 RestartSec=10
-WorkingDirectory=/opt/secos/idp
-ExecStartPre=-/usr/bin/podman-compose -f /opt/secos/idp/compose.yml down
-ExecStart=/usr/bin/podman-compose -f /opt/secos/idp/compose.yml up
-ExecStop=/usr/bin/podman-compose -f /opt/secos/idp/compose.yml down
+WorkingDirectory=%h/secos/idp
+ExecStartPre=-/usr/bin/podman-compose -f %h/secos/idp/compose.yml down
+ExecStart=/usr/bin/podman-compose -f %h/secos/idp/compose.yml up
+ExecStop=/usr/bin/podman-compose -f %h/secos/idp/compose.yml down
 TimeoutStartSec=600
 TimeoutStopSec=60
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

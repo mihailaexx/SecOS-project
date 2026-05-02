@@ -4,6 +4,9 @@ services:
     container_name: openldap
     hostname: openldap
     restart: on-failure
+    # Rootless: bitnami's entrypoint runs as root in-container, then drops to
+    # the bitnami user. Pinning to 0:0 avoids surprises and maps to host secos.
+    user: "0:0"
     security_opt:
       - seccomp=unconfined
       - label=type:container_t
@@ -18,7 +21,7 @@ services:
       LDAP_CUSTOM_LDIF_DIR: /ldifs
       LDAP_SKIP_DEFAULT_TREE: "yes"
     volumes:
-      - /etc/secos/openldap/ldifs:/ldifs:ro,Z
+      - /home/secos/secos/idp/openldap/ldifs:/ldifs:ro,Z
       - openldap-data:/bitnami/openldap:Z
     healthcheck:
       test: ["CMD-SHELL", "ldapsearch -H ldap://127.0.0.1:1389 -x -b 'dc=bastion,dc=local' -s base >/dev/null"]
@@ -36,7 +39,9 @@ services:
     container_name: keycloak
     hostname: keycloak
     restart: on-failure
-    user: "1000:1000"
+    # Rootless: in-container UID 0 maps to host `secos`. See monitoring compose
+    # for the full rationale.
+    user: "0:0"
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -57,7 +62,7 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
     command: ["start-dev", "--import-realm"]
     volumes:
-      - /etc/secos/keycloak/import:/opt/keycloak/data/import:ro,Z
+      - /home/secos/secos/idp/keycloak/import:/opt/keycloak/data/import:ro,Z
       - keycloak-data:/opt/keycloak/data:Z
     tmpfs:
       - /tmp:size=128m,mode=1777

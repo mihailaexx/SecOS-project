@@ -29,8 +29,44 @@
     - /opt/keycloak
     - /etc/systemd/system/keycloak.service
 
-# ── Config tree ──
-- name: Create /etc/secos IdP config tree
+# ── Remove legacy rootful IdP install ──
+- name: Stop + disable legacy rootful secos-idp unit
+  systemd:
+    name: secos-idp
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove legacy rootful unit file
+  file:
+    path: /etc/systemd/system/secos-idp.service
+    state: absent
+
+- name: Remove legacy /etc/secos IdP config tree
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/secos/openldap
+    - /etc/secos/keycloak
+    - /opt/secos/idp
+
+# ── Rootless config tree under secos $HOME ──
+- name: Create secos IdP config tree
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: secos
+    group: secos
+    mode: "0755"
+  loop:
+    - /home/secos/secos/idp
+    - /home/secos/secos/idp/openldap
+    - /home/secos/secos/idp/openldap/ldifs
+    - /home/secos/secos/idp/keycloak
+    - /home/secos/secos/idp/keycloak/import
+
+- name: Create root-owned operator paths
   file:
     path: "{{ item }}"
     state: directory
@@ -38,12 +74,6 @@
     group: root
     mode: "0755"
   loop:
-    - /etc/secos
-    - /etc/secos/openldap
-    - /etc/secos/openldap/ldifs
-    - /etc/secos/keycloak
-    - /etc/secos/keycloak/import
-    - /opt/secos/idp
     - /opt/secos/bin
     - /mnt/backups
 
@@ -51,16 +81,18 @@
 - name: Deploy OpenLDAP LDIF (container-compatible)
   copy:
     src: ldap-container.ldif
-    dest: /etc/secos/openldap/ldifs/01-users.ldif
+    dest: /home/secos/secos/idp/openldap/ldifs/01-users.ldif
+    owner: secos
+    group: secos
     mode: "0644"
   notify: restart idp
 
 - name: Generate OpenLDAP admin password
   copy:
     content: "admin\n"
-    dest: /etc/secos/openldap/admin_password
-    owner: root
-    group: root
+    dest: /home/secos/secos/idp/openldap/admin_password
+    owner: secos
+    group: secos
     mode: "0400"
   no_log: true
 
@@ -68,41 +100,52 @@
 - name: Deploy Keycloak realm import
   template:
     src: bastion-realm.json.j2
-    dest: /etc/secos/keycloak/import/bastion-realm.json
+    dest: /home/secos/secos/idp/keycloak/import/bastion-realm.json
+    owner: secos
+    group: secos
     mode: "0644"
   notify: restart idp
 
 - name: Generate Keycloak admin password
   copy:
     content: "{{ lookup('password', '/tmp/secos-keycloak-admin-password length=24 chars=ascii_letters,digits') }}"
-    dest: /etc/secos/keycloak/admin_password
-    owner: root
-    group: root
+    dest: /home/secos/secos/idp/keycloak/admin_password
+    owner: secos
+    group: secos
     mode: "0400"
   no_log: true
 
-# ── Compose + systemd ──
+# ── Compose + systemd user unit ──
 - name: Deploy IdP compose file
   copy:
     src: "{{ playbook_dir }}/../containers/idp/compose.yml"
-    dest: /opt/secos/idp/compose.yml
+    dest: /home/secos/secos/idp/compose.yml
+    owner: secos
+    group: secos
     mode: "0644"
   notify: restart idp
 
-- name: Install IdP systemd unit
+- name: Install IdP systemd user unit
   copy:
     src: secos-idp.service
-    dest: /etc/systemd/system/secos-idp.service
+    dest: /home/secos/.config/systemd/user/secos-idp.service
+    owner: secos
+    group: secos
     mode: "0644"
   notify:
-    - daemon reload
+    - daemon reload idp
     - restart idp
 
-- name: Enable and start IdP stack
+- name: Enable and start IdP stack (rootless)
+  become: true
+  become_user: secos
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
   systemd:
     name: secos-idp
     enabled: true
     state: started
+    scope: user
     daemon_reload: true
 
 # Drain any pending handler restarts (file copies above notify `restart idp`)
@@ -117,6 +160,11 @@
     host: 127.0.0.1
     port: 389
     timeout: 120
+
+- name: Install openldap-clients (needed for readiness check + backup script)
+  dnf:
+    name: openldap-clients
+    state: present
 
 - name: Wait for LDAP base DN (first-boot LDIF import)
   command: ldapsearch -x -H ldap://127.0.0.1:389 -b "dc=bastion,dc=local" -s base
@@ -151,12 +199,14 @@
     state: started
 
 # ── Backups ──
+# Backup scripts run as root from cron. The Keycloak container is owned by the
+# secos rootless runtime, so any `podman exec` must hop into secos's user
+# namespace via `sudo -iu secos` (which inherits XDG_RUNTIME_DIR via linger).
 - name: Install NFS utils and cronie
   dnf:
     name:
       - nfs-utils
       - cronie
-      - openldap-clients
     state: present
 
 - name: Mount NFS backup share
@@ -187,9 +237,11 @@
       #!/bin/bash
       set -e
       mkdir -p /mnt/backups/keycloak
-      /usr/bin/podman exec keycloak /opt/keycloak/bin/kc.sh export --dir /tmp/kc-export --realm bastion
-      /usr/bin/podman cp keycloak:/tmp/kc-export /mnt/backups/keycloak/$(date +%F)
-      /usr/bin/podman exec keycloak rm -rf /tmp/kc-export
+      DATE=$(date +%F)
+      sudo -iu secos /usr/bin/podman exec keycloak /opt/keycloak/bin/kc.sh export --dir /tmp/kc-export --realm bastion
+      sudo -iu secos /usr/bin/podman cp keycloak:/tmp/kc-export /home/secos/kc-export-$DATE
+      mv /home/secos/kc-export-$DATE /mnt/backups/keycloak/$DATE
+      sudo -iu secos /usr/bin/podman exec keycloak rm -rf /tmp/kc-export
       find /mnt/backups/keycloak/ -maxdepth 1 -mindepth 1 -type d -mtime +7 -exec rm -rf {} +
 
 - name: Deploy config backup script
