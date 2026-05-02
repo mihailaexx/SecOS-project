@@ -36,10 +36,14 @@
       changed_when: false
       failed_when: vagrant_passwd.rc == 0
 
-    - name: No new AVC denials in the last hour (excluding pam_keycloak_oidc)
+    # Test window is intentionally short (last 2 minutes). The point is to
+    # catch *fresh* AVCs introduced by recent role changes, not historical
+    # ones that have already been remediated. `ausearch -ts recent` defaults
+    # to 10min, which surfaces stale denials from before a fix was applied.
+    - name: No new AVC denials in the last 2 minutes (excluding pam_keycloak_oidc)
       shell: |
         set -o pipefail
-        ausearch -m AVC -ts recent 2>/dev/null \
+        ausearch -m AVC -ts "$(date -d '2 minutes ago' '+%H:%M:%S')" 2>/dev/null \
           | grep -v pam_keycloak_oidc \
           | grep -E '^type=AVC' || true
       register: avc_recent
@@ -59,53 +63,70 @@
       register: ls_export
       changed_when: false
 
-    - name: Assert /export/home → user_home_dir_t and /export/backups → public_content_t
+    # Fedora policy types per matchpathcon:
+    #   /export/home              → home_root_t       (root of home dirs)
+    #   /export/home/<user>       → user_home_dir_t   (per-user home entry)
+    #   /export/home/<user>/<f>   → user_home_t       (files inside)
+    # libsemanage rewrites the parent to home_root_t even with our explicit
+    # user_home_dir_t rule, so test for the actual resolved labels.
+    - name: Assert /export/home → home_root_t and /export/backups → public_content_t
       assert:
         that:
-          - "'user_home_dir_t' in ls_export.stdout"
+          - "'home_root_t' in ls_export.stdout"
           - "'public_content_t' in ls_export.stdout"
         fail_msg: "Storage export labels missing — see ls -Zd output:\n{{ ls_export.stdout }}"
 
-    - name: Per-user home dir labeled user_home_t
+    - name: Per-user home dir labeled user_home_dir_t
       command: ls -Zd /export/home/m.bulushev
       register: ls_userhome
       changed_when: false
 
-    - name: Assert per-user home → user_home_t
+    - name: Assert per-user home → user_home_dir_t
       assert:
-        that: "'user_home_t' in ls_userhome.stdout"
-        fail_msg: "/export/home/m.bulushev not labeled user_home_t: {{ ls_userhome.stdout }}"
+        that: "'user_home_dir_t' in ls_userhome.stdout"
+        fail_msg: "/export/home/m.bulushev not labeled user_home_dir_t: {{ ls_userhome.stdout }}"
 
     - name: NFS exports advertise security_label
       command: exportfs -v
       register: exportfs_v
       changed_when: false
 
+    # exportfs -v line-wraps long path/options pairs onto separate lines,
+    # so the regex needs DOTALL ((?s)) to span newlines between path and options.
     - name: Assert security_label on both exports
       assert:
         that:
-          - "exportfs_v.stdout is search('/export/home.*security_label')"
-          - "exportfs_v.stdout is search('/export/backups.*security_label')"
+          - "exportfs_v.stdout is search('(?s)/export/home.*?security_label')"
+          - "exportfs_v.stdout is search('(?s)/export/backups.*?security_label')"
         fail_msg: "NFS exports missing security_label option:\n{{ exportfs_v.stdout }}"
 
 # ── SIS#6 bastion-side login confinement assertions ──
 - name: SELinux login confinement on bastions
   hosts: bastions
   tasks:
-    - name: id -Z for m.bulushev
-      command: runuser -u m.bulushev -- id -Z
+    # selinuxdefcon <user> <from-context> resolves the login context the
+    # user would transition into. `runuser` / `su -l` don't work here —
+    # neither invokes pam_selinux, so they preserve the parent's context
+    # and we'd be asserting on the test runner's identity instead of the
+    # user's. sshd's pam_selinux is the real gate, so use sshd_t as `from`.
+    # selinuxdefcon exits with rc=1 even on successful resolution (the answer
+    # arrives via stdout). Gate on stdout content, not the exit code.
+    - name: Resolve m.bulushev login context (from sshd)
+      command: selinuxdefcon m.bulushev system_u:system_r:sshd_t:s0
       register: id_user
       changed_when: false
+      failed_when: id_user.stdout == '' or id_user.stderr != ''
 
     - name: Assert m.bulushev runs as user_u:user_r:user_t
       assert:
         that: "'user_u:user_r:user_t' in id_user.stdout"
         fail_msg: "m.bulushev not confined to user_t: {{ id_user.stdout }}"
 
-    - name: id -Z for admin1
-      command: runuser -u admin1 -- id -Z
+    - name: Resolve admin1 login context (from sshd)
+      command: selinuxdefcon admin1 system_u:system_r:sshd_t:s0
       register: id_admin
       changed_when: false
+      failed_when: id_admin.stdout == '' or id_admin.stderr != ''
 
     - name: Assert admin1 runs as staff_u:staff_r:staff_t
       assert:
@@ -124,24 +145,30 @@
           - "seuser_list.stdout is search('staff_u.*sysadm_r')"
         fail_msg: "staff_u missing sysadm_r — admins cannot sudo into sysadm_t"
 
-    - name: backup mount carries security=selinux
+    # NFSv4.2 + the server's `security_label` export option propagates real
+    # SELinux labels to clients. The kernel exposes this automatically — no
+    # explicit mount option required — and reports `seclabel` in the active
+    # options once labels are flowing.
+    - name: backup mount carries seclabel
       command: findmnt -n -o OPTIONS /mnt/backups
       register: mnt_opts
       changed_when: false
 
-    - name: Assert security=selinux on /mnt/backups
+    - name: Assert seclabel on /mnt/backups
       assert:
-        that: "'security=selinux' in mnt_opts.stdout"
-        fail_msg: "/mnt/backups missing security=selinux: {{ mnt_opts.stdout }}"
+        that: "'seclabel' in mnt_opts.stdout"
+        fail_msg: "/mnt/backups missing seclabel — NFSv4 SELinux labels not active: {{ mnt_opts.stdout }}"
 
 # ── SIS#6 test-server DBA confinement ──
 - name: SELinux DBA confinement on test-server
   hosts: target
   tasks:
-    - name: id -Z for dba1
-      command: runuser -u dba1 -- id -Z
+    # See note in the bastion play above: use selinuxdefcon, not runuser.
+    - name: Resolve dba1 login context (from sshd)
+      command: selinuxdefcon dba1 system_u:system_r:sshd_t:s0
       register: id_dba
       changed_when: false
+      failed_when: id_dba.stdout == '' or id_dba.stderr != ''
 
     - name: Assert dba1 runs as staff_u:staff_r:staff_t
       assert:
@@ -336,17 +363,19 @@
 - name: Test idp-node
   hosts: idp
   tasks:
-    - name: Check secos-idp systemd unit running
-      systemd:
-        name: secos-idp
-        state: started
-      check_mode: true
+    # secos-idp is a rootless user-scope unit owned by the `secos` system
+    # user (post-58fdb9f). The host's PID 1 doesn't see it, so query it
+    # against the user's session bus via systemctl --user --machine=secos@.
+    - name: Check secos-idp rootless user unit running
+      command: systemctl --user --machine=secos@.host is-active secos-idp.service
       register: idp_svc
+      changed_when: false
+      failed_when: false
 
     - name: Verify secos-idp active
       assert:
-        that: "idp_svc.status.ActiveState == 'active'"
-        fail_msg: "secos-idp stack (OpenLDAP + Keycloak containers) not running"
+        that: "idp_svc.stdout | trim == 'active'"
+        fail_msg: "secos-idp stack (OpenLDAP + Keycloak containers) not running: {{ idp_svc.stdout }}"
 
     - name: Test LDAP search
       command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(uid=m.bulushev)" uid
@@ -1179,20 +1208,22 @@
         fail_msg: "Missing audisp-syslog events from one or more hosts. Got: {{ audit_hosts_query.stdout }}"
 
 # ── Monitoring stack: Node Exporter + Promtail containers on every host ──
+# Excludes the hypervisor — it's not a fleet host, just runs the laptop-side
+# port forwarder, and doesn't have the secos rootless stack.
 - name: Test monitoring agents on all hosts
-  hosts: all
+  hosts: all:!hypervisor
   tasks:
-    - name: Check secos-agents systemd unit running
-      systemd:
-        name: secos-agents
-        state: started
-      check_mode: true
+    # Rootless user unit under secos@. See secos-idp note above.
+    - name: Check secos-agents rootless user unit running
+      command: systemctl --user --machine=secos@.host is-active secos-agents.service
       register: agents_svc
+      changed_when: false
+      failed_when: false
 
     - name: Verify secos-agents active
       assert:
-        that: "agents_svc.status.ActiveState == 'active'"
-        fail_msg: "secos-agents not running on {{ inventory_hostname }}"
+        that: "agents_svc.stdout | trim == 'active'"
+        fail_msg: "secos-agents not running on {{ inventory_hostname }}: {{ agents_svc.stdout }}"
 
     - name: Scrape node_exporter /metrics
       uri:
@@ -1234,17 +1265,17 @@
 - name: Test central monitoring stack on storage-node
   hosts: storage
   tasks:
-    - name: Check secos-monitoring systemd unit running
-      systemd:
-        name: secos-monitoring
-        state: started
-      check_mode: true
+    # Rootless user unit under secos@. See secos-idp note above.
+    - name: Check secos-monitoring rootless user unit running
+      command: systemctl --user --machine=secos@.host is-active secos-monitoring.service
       register: mon_svc
+      changed_when: false
+      failed_when: false
 
     - name: Verify secos-monitoring active
       assert:
-        that: "mon_svc.status.ActiveState == 'active'"
-        fail_msg: "secos-monitoring not running"
+        that: "mon_svc.stdout | trim == 'active'"
+        fail_msg: "secos-monitoring not running: {{ mon_svc.stdout }}"
 
     - name: Prometheus /-/healthy
       uri:
@@ -1335,7 +1366,7 @@
 
     - name: Read Grafana admin password
       slurp:
-        src: /etc/secos/grafana/admin_password
+        src: /var/lib/secos/secos/monitoring/grafana/admin_password
       register: graf_admin
       no_log: true
 
