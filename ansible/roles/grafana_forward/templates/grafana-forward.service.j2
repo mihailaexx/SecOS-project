@@ -1,0 +1,17 @@
+[Unit]
+Description=Forward host LAN :{{ grafana_forward_listen_port }} to storage-node Grafana ({{ grafana_forward_target_host }}:{{ grafana_forward_target_port }})
+After=network-online.target libvirtd.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/socat -d -d TCP-LISTEN:{{ grafana_forward_listen_port }},bind={{ grafana_forward_bind_ip }},fork,reuseaddr TCP:{{ grafana_forward_target_host }}:{{ grafana_forward_target_port }}
+Restart=on-failure
+RestartSec=2
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

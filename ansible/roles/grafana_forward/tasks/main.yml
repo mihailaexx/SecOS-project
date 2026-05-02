@@ -1,0 +1,54 @@
+---
+- name: Install socat
+  dnf:
+    name: socat
+    state: present
+
+- name: Install grafana-forward systemd unit
+  template:
+    src: grafana-forward.service.j2
+    dest: /etc/systemd/system/grafana-forward.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - daemon reload
+    - restart grafana-forward
+
+- name: Enable and start grafana-forward
+  systemd:
+    name: grafana-forward
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# ── Host firewall (firewalld) ──
+- name: Open listener port zone-wide (no source restriction)
+  ansible.posix.firewalld:
+    zone: "{{ grafana_forward_firewalld_zone }}"
+    port: "{{ grafana_forward_listen_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  when: grafana_forward_allowed_source | length == 0
+
+- name: Restrict listener port to a single source CIDR
+  ansible.posix.firewalld:
+    zone: "{{ grafana_forward_firewalld_zone }}"
+    rich_rule: >-
+      rule family="ipv4"
+      source address="{{ grafana_forward_allowed_source }}"
+      port port="{{ grafana_forward_listen_port }}" protocol="tcp" accept
+    permanent: true
+    immediate: true
+    state: enabled
+  when: grafana_forward_allowed_source | length > 0
+
+- name: Drop zone-wide rule when a source restriction is configured
+  ansible.posix.firewalld:
+    zone: "{{ grafana_forward_firewalld_zone }}"
+    port: "{{ grafana_forward_listen_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: disabled
+  when: grafana_forward_allowed_source | length > 0

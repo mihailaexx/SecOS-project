@@ -83,7 +83,7 @@
       become: false
 
 - name: Install container runtime on all hosts
-  hosts: all
+  hosts: all:!hypervisor
   roles:
     - container_runtime
 
@@ -117,7 +117,7 @@
 # the central log sink, then enable shippers on the rest of the fleet.
 
 - name: Configure auditd on all hosts
-  hosts: all
+  hosts: all:!hypervisor
   roles:
     - audit
 
@@ -141,6 +141,19 @@
     - monitoring_stack
 
 - name: Deploy monitoring agents on all hosts
-  hosts: all
+  hosts: all:!hypervisor
   roles:
     - monitoring_agents
+
+# ── Hypervisor-side access ──
+# Forward host LAN :3000 -> storage-node Grafana so a laptop on the workstation's
+# LAN can reach Grafana without joining 192.168.56.0/24.
+# Runs against the local workstation (group [hypervisor] in inventory). Because
+# this play uses local sudo, invoke with `--ask-become-pass` (-K), or limit to
+# the lab with `--limit '!hypervisor'` to skip it.
+
+- name: Configure hypervisor-side TCP forwarders
+  hosts: hypervisor
+  become: true
+  roles:
+    - grafana_forward

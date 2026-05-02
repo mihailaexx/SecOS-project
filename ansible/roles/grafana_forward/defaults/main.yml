@@ -1,0 +1,18 @@
+---
+# Hypervisor-side TCP forwarder: laptop on the host LAN -> hypervisor -> storage-node Grafana.
+# Storage-node already allows 3000/tcp from 192.168.56.0/24, and the hypervisor reaches
+# storage as 192.168.56.1, so no firewall change on storage-node is required.
+
+# Listener (host side) — bind to the LAN-facing IP, never 0.0.0.0
+grafana_forward_bind_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+grafana_forward_listen_port: 3000
+
+# Upstream (lab side)
+grafana_forward_target_host: "{{ hostvars['storage-node'].ansible_host | default('192.168.56.50') }}"
+grafana_forward_target_port: 3000
+
+# Host firewall
+grafana_forward_firewalld_zone: FedoraWorkstation
+# Optional: restrict ingress to a single source CIDR (e.g. "10.100.47.50/32").
+# When empty the listener port is opened zone-wide.
+grafana_forward_allowed_source: ""
