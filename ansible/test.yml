@@ -660,6 +660,78 @@
         that: "pam_kc_help.rc != 127 and pam_kc_help.rc != 126"
         fail_msg: "pam-keycloak-oidc binary won't execute (linker / SELinux denial)"
 
+    # ── SIS#6: custom restricted SELinux policy assertions ──
+    - name: List installed SELinux modules
+      command: semodule -l
+      register: semodule_list
+      changed_when: false
+
+    - name: Verify custom pam_keycloak_oidc SELinux module is loaded
+      assert:
+        that: "'pam_keycloak_oidc' in semodule_list.stdout"
+        fail_msg: "Custom SELinux module pam_keycloak_oidc is not installed"
+
+    - name: List SELinux types defined by the custom policy
+      command: seinfo -t
+      register: seinfo_types
+      changed_when: false
+
+    - name: Verify custom domain + file types + port type exist
+      assert:
+        that:
+          - "'pam_keycloak_oidc_t' in seinfo_types.stdout"
+          - "'pam_keycloak_oidc_exec_t' in seinfo_types.stdout"
+          - "'pam_keycloak_oidc_conf_t' in seinfo_types.stdout"
+          - "'pam_keycloak_oidc_log_t' in seinfo_types.stdout"
+          - "'pam_keycloak_oidc_port_t' in seinfo_types.stdout"
+        fail_msg: "Custom SELinux types missing — check pam_keycloak_oidc.te"
+
+    - name: Verify pam_keycloak_oidc_t is NOT permissive (must be enforcing)
+      command: semodule --list-modules=full
+      register: semodule_full
+      changed_when: false
+
+    - name: Check no permissive entry for pam_keycloak_oidc
+      shell: |
+        semanage permissive -l 2>/dev/null | grep -E '^pam_keycloak_oidc_t$' || true
+      register: permissive_check
+      changed_when: false
+
+    - name: Assert custom domain runs in enforcing mode
+      assert:
+        that: "permissive_check.stdout == ''"
+        fail_msg: "pam_keycloak_oidc_t is permissive — SIS#6 requires restricted enforcing rules"
+
+    - name: Verify custom port type is bound to 8080/tcp
+      command: semanage port -l
+      register: semanage_ports
+      changed_when: false
+
+    - name: Assert 8080/tcp is labeled pam_keycloak_oidc_port_t
+      assert:
+        that: "'pam_keycloak_oidc_port_t' in semanage_ports.stdout and '8080' in (semanage_ports.stdout_lines | select('search', 'pam_keycloak_oidc_port_t') | list | join(' '))"
+        fail_msg: "Port 8080/tcp is not labeled pam_keycloak_oidc_port_t"
+
+    - name: Verify pam-keycloak-oidc binary has _exec_t label
+      command: stat -c '%C' /opt/pam-keycloak-oidc/pam-keycloak-oidc
+      register: stat_bin
+      changed_when: false
+
+    - name: Assert binary labeled pam_keycloak_oidc_exec_t
+      assert:
+        that: "'pam_keycloak_oidc_exec_t' in stat_bin.stdout"
+        fail_msg: "Binary not labeled pam_keycloak_oidc_exec_t — restorecon may have failed"
+
+    - name: Verify config file has _conf_t label
+      command: stat -c '%C' /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
+      register: stat_cfg
+      changed_when: false
+
+    - name: Assert config labeled pam_keycloak_oidc_conf_t
+      assert:
+        that: "'pam_keycloak_oidc_conf_t' in stat_cfg.stdout"
+        fail_msg: "Config not labeled pam_keycloak_oidc_conf_t"
+
     - name: Check all 3 LDAP users resolve via SSSD
       command: getent passwd m.bulushev admin1 dba1
       register: getent_all

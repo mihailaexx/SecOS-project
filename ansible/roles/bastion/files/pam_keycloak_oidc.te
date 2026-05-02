@@ -1,19 +1,97 @@
-module pam_keycloak_oidc 1.0;
+policy_module(pam_keycloak_oidc, 1.0.0)
 
-require {
+########################################
+# Declarations
+########################################
+
+# Restricted domain entered by sshd's pam_exec when it runs the helper.
+type pam_keycloak_oidc_t;
+type pam_keycloak_oidc_exec_t;
+domain_type(pam_keycloak_oidc_t)
+domain_entry_file(pam_keycloak_oidc_t, pam_keycloak_oidc_exec_t)
+role system_r types pam_keycloak_oidc_t;
+
+# Distinct file types — config and log are NOT lumped under generic etc/log labels.
+type pam_keycloak_oidc_conf_t;
+files_type(pam_keycloak_oidc_conf_t)
+
+type pam_keycloak_oidc_log_t;
+logging_log_file(pam_keycloak_oidc_log_t)
+
+# Custom port type for Keycloak — no piggybacking on http_cache_port_t.
+type pam_keycloak_oidc_port_t;
+corenet_port(pam_keycloak_oidc_port_t)
+
+########################################
+# Domain transition: sshd_t → pam_keycloak_oidc_t
+########################################
+
+gen_require(`
     type sshd_t;
-    type var_log_t;
-    type http_cache_port_t;
-    type ssh_port_t;
-    class file { create open write append getattr };
-    class tcp_socket name_connect;
-}
+')
 
-# Allow sshd (pam_exec) to write pam-keycloak-oidc log
-allow sshd_t var_log_t:file { create open write append getattr };
+# pam_exec inside sshd execs the binary; transition into the restricted domain.
+allow sshd_t pam_keycloak_oidc_exec_t:file { read getattr open execute ioctl map };
+domtrans_pattern(sshd_t, pam_keycloak_oidc_exec_t, pam_keycloak_oidc_t)
 
-# Allow sshd (pam-keycloak-oidc) to connect to Keycloak on port 8080
-allow sshd_t http_cache_port_t:tcp_socket name_connect;
+# Inherited from sshd: stdio, fds, signals.
+allow pam_keycloak_oidc_t sshd_t:fd use;
+allow pam_keycloak_oidc_t sshd_t:fifo_file rw_fifo_file_perms;
+allow pam_keycloak_oidc_t sshd_t:process { sigchld signull };
 
-# Allow bastion sshd to open ProxyJump/forwarded channels to target:22
-allow sshd_t ssh_port_t:tcp_socket name_connect;
+########################################
+# File access — only what the helper needs
+########################################
+
+# Read-only access to its own config tree.
+allow pam_keycloak_oidc_t pam_keycloak_oidc_conf_t:dir list_dir_perms;
+allow pam_keycloak_oidc_t pam_keycloak_oidc_conf_t:file read_file_perms;
+allow pam_keycloak_oidc_t pam_keycloak_oidc_conf_t:lnk_file read_lnk_file_perms;
+
+# Append-only logging to its own log file.
+allow pam_keycloak_oidc_t pam_keycloak_oidc_log_t:dir { search_dir_perms add_entry_dir_perms };
+allow pam_keycloak_oidc_t pam_keycloak_oidc_log_t:file { create_file_perms append_file_perms getattr setattr };
+logging_log_filetrans(pam_keycloak_oidc_t, pam_keycloak_oidc_log_t, file)
+
+# Read-only nsswitch / resolv.conf for the resolver.
+sysnet_read_config(pam_keycloak_oidc_t)
+sysnet_dns_name_resolve(pam_keycloak_oidc_t)
+
+# TLS roots (for HTTPS Keycloak endpoints).
+miscfiles_read_generic_certs(pam_keycloak_oidc_t)
+
+# Go runtime needs procfs, /sys/net, entropy.
+kernel_read_system_state(pam_keycloak_oidc_t)
+kernel_read_net_sysctls(pam_keycloak_oidc_t)
+dev_read_urand(pam_keycloak_oidc_t)
+dev_read_rand(pam_keycloak_oidc_t)
+
+# Logging via syslog/journal (pam_exec sends stderr down this path).
+logging_send_syslog_msg(pam_keycloak_oidc_t)
+
+########################################
+# Network — only outbound to the custom Keycloak port
+########################################
+
+allow pam_keycloak_oidc_t self:tcp_socket create_stream_socket_perms;
+allow pam_keycloak_oidc_t self:udp_socket create_socket_perms;
+allow pam_keycloak_oidc_t self:netlink_route_socket r_netlink_socket_perms;
+
+# Connect outbound to Keycloak on our custom port type ONLY.
+corenet_tcp_sendrecv_generic_if(pam_keycloak_oidc_t)
+corenet_tcp_sendrecv_generic_node(pam_keycloak_oidc_t)
+corenet_all_recvfrom_unlabeled(pam_keycloak_oidc_t)
+allow pam_keycloak_oidc_t pam_keycloak_oidc_port_t:tcp_socket { name_connect recv_msg send_msg };
+
+# All other ports denied by omission — no generic name_connect to *_port_t.
+
+########################################
+# Executable permissions
+########################################
+
+# No execmem / execstack / execheap — modern Go does not need them.
+# No exec of any other binary; only the entrypoint above is allowed.
+dontaudit pam_keycloak_oidc_t self:process { execmem execstack execheap };
+
+# This module deliberately omits a permissive statement:
+#   the domain runs in enforcing-by-default mode.

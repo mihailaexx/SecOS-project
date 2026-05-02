@@ -10,6 +10,9 @@
       - cronie
       - policycoreutils-python-utils
       - checkpolicy
+      - selinux-policy-devel
+      - setools-console
+      - make
     state: present
 
 # ── SSHD config (deploy FIRST to keep vagrant auth alive through authselect) ──
@@ -109,21 +112,57 @@
     dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
 
 # ── SELinux policy for pam-keycloak-oidc ──
-- name: Copy SELinux policy source
+# Custom restricted policy:
+#   * dedicated domain pam_keycloak_oidc_t (no permissive statement)
+#   * three file types: _exec_t, _conf_t, _log_t
+#   * custom port type pam_keycloak_oidc_port_t (no piggybacking on http_cache_port_t)
+- name: Create SELinux build directory for pam-keycloak-oidc
+  file:
+    path: /var/lib/selinux-build/pam_keycloak_oidc
+    state: directory
+    mode: "0755"
+
+- name: Stage SELinux policy sources (.te + .fc)
   copy:
-    src: pam_keycloak_oidc.te
-    dest: /tmp/pam_keycloak_oidc.te
+    src: "{{ item }}"
+    dest: "/var/lib/selinux-build/pam_keycloak_oidc/{{ item }}"
+  loop:
+    - pam_keycloak_oidc.te
+    - pam_keycloak_oidc.fc
+  register: selinux_src
 
-- name: Compile SELinux policy module
-  command: checkmodule -M -m -o /tmp/pam_keycloak_oidc.mod /tmp/pam_keycloak_oidc.te
-  changed_when: false
-
-- name: Package SELinux policy module
-  command: semodule_package -o /tmp/pam_keycloak_oidc.pp -m /tmp/pam_keycloak_oidc.mod
-  changed_when: false
+- name: Build SELinux policy module via refpolicy devel Makefile
+  command: make -f /usr/share/selinux/devel/Makefile pam_keycloak_oidc.pp
+  args:
+    chdir: /var/lib/selinux-build/pam_keycloak_oidc
+  when: selinux_src.changed
+  changed_when: true
 
 - name: Install SELinux policy module
-  command: semodule -i /tmp/pam_keycloak_oidc.pp
+  command: semodule -i /var/lib/selinux-build/pam_keycloak_oidc/pam_keycloak_oidc.pp
+  when: selinux_src.changed
+  changed_when: true
+
+# Bind the custom port type to 8080/tcp (Keycloak)
+- name: Label Keycloak TCP port 8080 as pam_keycloak_oidc_port_t
+  community.general.seport:
+    ports: 8080
+    proto: tcp
+    setype: pam_keycloak_oidc_port_t
+    state: present
+
+# Ensure log file exists so the file-context rule can label it
+- name: Pre-create pam-keycloak-oidc log file
+  file:
+    path: /var/log/pam-keycloak-oidc.log
+    state: touch
+    owner: root
+    group: root
+    mode: "0640"
+  changed_when: false
+
+- name: Apply file contexts for pam-keycloak-oidc paths
+  command: restorecon -RFv /opt/pam-keycloak-oidc /var/log/pam-keycloak-oidc.log
   changed_when: false
 
 # ── Groups ──
