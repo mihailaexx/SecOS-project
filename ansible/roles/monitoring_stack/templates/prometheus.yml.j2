@@ -5,7 +5,7 @@ global:
 scrape_configs:
   - job_name: 'node'
     static_configs:
-{% for host in groups['all'] %}
+{% for host in groups['all'] if host not in groups.get('hypervisor', []) %}
       - targets: ['{{ hostvars[host].ansible_host }}:9100']
         labels:
           host: '{{ host }}'
