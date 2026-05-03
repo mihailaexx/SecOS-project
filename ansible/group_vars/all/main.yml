@@ -1,0 +1,36 @@
+---
+# Network-level facts shared across roles. Single source of truth so
+# templates render the right address regardless of inventory edits.
+secos_storage_host: storage-node
+secos_idp_host: idp-node
+secos_lb_host: lb-node
+secos_hypervisor_host: host-pc
+
+# Resolved IPs (rendered from hostvars at runtime).
+secos_storage_ip: "{{ hostvars[secos_storage_host].ansible_host }}"
+secos_idp_ip:     "{{ hostvars[secos_idp_host].ansible_host }}"
+secos_lb_ip:      "{{ hostvars[secos_lb_host].ansible_host }}"
+secos_hypervisor_ip: "{{ hostvars[secos_hypervisor_host].ansible_host | default('192.168.56.1') }}"
+
+# Lab CIDR — used by firewalld zones and pg_hba host entries.
+secos_lab_cidr: "192.168.56.0/24"
+
+# NFS mount opts. SELinux label flow is negotiated automatically when the
+# *server* advertises `security_label` in /etc/exports and the client
+# mounts with v4.2 — there is no client-side `security_label` mount
+# option (mount.nfs rejects it). The kernel exposes `seclabel` in
+# `findmnt -o OPTIONS` once labels are flowing, which is what the
+# SIS#6 test assertion checks.
+#
+# Used with `fstype: nfs` (NOT `nfs4`): mount.nfs4 rejects `vers=`,
+# so we use the generic `nfs` driver and let `vers=4.2` select v4.2.
+secos_nfs_mount_opts: "vers=4.2,sec=sys,_netdev"
+
+# LDAP transport. Lab default is plaintext because no CA is provisioned;
+# flip to true once OpenLDAP is configured with a server cert and the
+# CA is pushed to bastion trust stores.
+bastion_ldap_use_starttls: false
+
+# Controller-side cache dir for `lookup('password', ...)` files. The
+# legacy `/tmp/secos-*` path was world-readable on shared controllers.
+secos_password_cache_dir: "{{ lookup('env', 'HOME') }}/.ansible/secos"

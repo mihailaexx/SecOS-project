@@ -12,3 +12,7 @@
 
 # Large pre-staged artifacts (re-fetched locally by the role)
 ansible/files/cache/keycloak-*.tar.gz
+
+# Vaulted secrets — never commit unencrypted, and we don't want stray
+# encrypted copies escaping by accident either.
+ansible/group_vars/all/vault.yml

@@ -1,0 +1,24 @@
+---
+# Copy to vault.yml and encrypt with `ansible-vault encrypt vault.yml`.
+# Run plays with `--ask-vault-pass` (or `--vault-password-file`).
+#
+#   cp vault.yml.example vault.yml
+#   ansible-vault encrypt vault.yml
+#
+# vault.yml is git-ignored to prevent accidental commit.
+
+# OIDC client secret shared by Keycloak realm (server-side) and the
+# pam-keycloak-oidc client config on bastions (consumer-side).
+vault_keycloak_client_secret: "REPLACE_WITH_LONG_RANDOM_STRING"
+
+# Initial passwords for the three demo accounts in the bastion realm.
+# Users should rotate via Keycloak account console after first login.
+vault_keycloak_user_password_m_bulushev: "REPLACE_ME"
+vault_keycloak_user_password_admin1:    "REPLACE_ME"
+vault_keycloak_user_password_dba1:      "REPLACE_ME"
+
+# OpenLDAP rootdn password (cn=admin,dc=bastion,dc=local).
+vault_openldap_admin_password: "REPLACE_ME"
+
+# PostgreSQL dba1 role password.
+vault_postgres_dba1_password: "REPLACE_ME"
