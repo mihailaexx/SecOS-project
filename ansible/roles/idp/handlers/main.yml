@@ -4,7 +4,7 @@
   become_user: secos
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
-  systemd:
+  ansible.builtin.systemd:
     daemon_reload: true
     scope: user
 
@@ -13,12 +13,12 @@
   become_user: secos
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
-  systemd:
+  ansible.builtin.systemd:
     name: secos-idp
     state: restarted
     scope: user
 
 - name: reload firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     state: reloaded

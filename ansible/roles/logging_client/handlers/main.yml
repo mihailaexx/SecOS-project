@@ -1,10 +1,10 @@
 ---
 - name: restart journald
-  systemd:
+  ansible.builtin.systemd:
     name: systemd-journald
     state: restarted
 
 - name: restart journal-upload
-  systemd:
+  ansible.builtin.systemd:
     name: systemd-journal-upload.service
     state: restarted

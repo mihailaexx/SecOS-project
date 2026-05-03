@@ -1,8 +1,8 @@
 ---
 - name: reload nfs
-  command: exportfs -rav
+  ansible.builtin.command: exportfs -rav
 
 - name: reload firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     state: reloaded

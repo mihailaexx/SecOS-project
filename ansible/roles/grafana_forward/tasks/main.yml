@@ -1,11 +1,11 @@
 ---
 - name: Install socat
-  dnf:
+  ansible.builtin.dnf:
     name: socat
     state: present
 
 - name: Install grafana-forward systemd unit
-  template:
+  ansible.builtin.template:
     src: grafana-forward.service.j2
     dest: /etc/systemd/system/grafana-forward.service
     owner: root
@@ -16,7 +16,7 @@
     - restart grafana-forward
 
 - name: Enable and start grafana-forward
-  systemd:
+  ansible.builtin.systemd:
     name: grafana-forward
     enabled: true
     state: started

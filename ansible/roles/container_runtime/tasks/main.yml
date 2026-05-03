@@ -1,6 +1,6 @@
 ---
 - name: Install podman and compose provider
-  dnf:
+  ansible.builtin.dnf:
     name:
       - podman
       - podman-compose
@@ -16,7 +16,7 @@
     state: present
 
 - name: Ensure containers config drop-in dirs exist
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: root
@@ -27,13 +27,13 @@
     - /etc/containers/registries.conf.d
 
 - name: Install hardened containers.conf drop-in
-  copy:
+  ansible.builtin.copy:
     src: 10-secos.conf
     dest: /etc/containers/containers.conf.d/10-secos.conf
     mode: "0644"
 
 - name: Pin registries (no implicit docker.io lookup)
-  copy:
+  ansible.builtin.copy:
     src: registries-secos.conf
     dest: /etc/containers/registries.conf.d/10-secos.conf
     mode: "0644"
@@ -43,7 +43,7 @@
 # this dedicated unprivileged user. Linger keeps its systemd user manager alive
 # at boot, so quadlet/compose units start without a login session.
 - name: Create secos rootless container user
-  user:
+  ansible.builtin.user:
     name: secos
     system: false
     shell: /bin/bash
@@ -55,18 +55,18 @@
     state: present
 
 - name: Look up secos uid/gid
-  command: id -u secos
+  ansible.builtin.command: id -u secos
   register: secos_uid_lookup
   changed_when: false
 
 - name: Set secos_uid fact
-  set_fact:
+  ansible.builtin.set_fact:
     secos_uid: "{{ secos_uid_lookup.stdout | int }}"
 
 # Some Fedora installs don't auto-allocate subuid/subgid for users created by
 # ansible. Allocate explicitly so user namespaces work.
 - name: Ensure subuid range for secos
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/subuid
     regexp: '^secos:'
     line: "secos:100000:65536"
@@ -74,7 +74,7 @@
     mode: "0644"
 
 - name: Ensure subgid range for secos
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/subgid
     regexp: '^secos:'
     line: "secos:100000:65536"
@@ -82,7 +82,7 @@
     mode: "0644"
 
 - name: Enable linger so secos systemd user manager runs at boot
-  command: loginctl enable-linger secos
+  ansible.builtin.command: loginctl enable-linger secos
   args:
     creates: "/var/lib/systemd/linger/secos"
 
@@ -90,7 +90,7 @@
 # Drop the unprivileged port floor to 80; SELinux + per-listener capabilities
 # still restrict who can actually bind.
 - name: Allow rootless bind to ports >= 80
-  copy:
+  ansible.builtin.copy:
     dest: /etc/sysctl.d/10-secos-rootless-ports.conf
     mode: "0644"
     content: |
@@ -98,12 +98,12 @@
   register: rootless_ports_sysctl
 
 - name: Apply rootless port sysctl
-  command: sysctl --load=/etc/sysctl.d/10-secos-rootless-ports.conf
+  ansible.builtin.command: sysctl --load=/etc/sysctl.d/10-secos-rootless-ports.conf
   when: rootless_ports_sysctl.changed
   changed_when: false
 
 - name: Pre-create secos rootless config tree
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: secos
@@ -119,6 +119,6 @@
 # /run/user/<uid> is created by linger but only after the user manager starts.
 # Wait for it so subsequent role tasks can talk to systemd --user.
 - name: Wait for secos user runtime dir
-  wait_for:
+  ansible.builtin.wait_for:
     path: "/run/user/{{ secos_uid }}/systemd/private"
     timeout: 30

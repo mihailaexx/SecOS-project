@@ -1,24 +1,24 @@
 ---
 - name: restart autofs
-  systemd:
+  ansible.builtin.systemd:
     name: autofs
     state: restarted
 
 - name: restart sssd
-  systemd:
+  ansible.builtin.systemd:
     name: sssd
     state: restarted
 
 - name: validate sshd config
-  command: sshd -t
+  ansible.builtin.command: sshd -t
   listen: restart sshd
 
 - name: restart sshd
-  systemd:
+  ansible.builtin.systemd:
     name: sshd
     state: restarted
 
 - name: reload firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     state: reloaded

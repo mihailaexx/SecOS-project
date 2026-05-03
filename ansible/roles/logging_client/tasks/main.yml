@@ -4,17 +4,17 @@
 # while the collector is unreachable.
 
 - name: Install systemd-journal-remote package (provides journal-upload)
-  dnf:
+  ansible.builtin.dnf:
     name: systemd-journal-remote
     state: present
 
 - name: Ensure journald drop-in directory
-  file:
+  ansible.builtin.file:
     path: /etc/systemd/journald.conf.d
     state: directory
 
 - name: Enable persistent journald storage
-  copy:
+  ansible.builtin.copy:
     dest: /etc/systemd/journald.conf.d/00-persistent.conf
     content: |
       [Journal]
@@ -23,7 +23,7 @@
   notify: restart journald
 
 - name: Deploy journal-upload config
-  template:
+  ansible.builtin.template:
     src: journal-upload.conf.j2
     dest: /etc/systemd/journal-upload.conf
     mode: "0644"
@@ -33,7 +33,7 @@
 # so do not pre-create /var/lib/systemd/journal-upload here.
 
 - name: Enable and start journal-upload
-  systemd:
+  ansible.builtin.systemd:
     name: systemd-journal-upload.service
     enabled: true
     state: started

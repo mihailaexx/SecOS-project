@@ -1,15 +1,10 @@
 ---
 - name: restart haproxy
-  systemd:
+  ansible.builtin.systemd:
     name: haproxy
     state: restarted
 
-- name: restart sshd
-  systemd:
-    name: sshd
-    state: restarted
-
 - name: reload firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     state: reloaded
