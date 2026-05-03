@@ -40,7 +40,7 @@
       "clientId": "bastion-ssh",
       "enabled": true,
       "publicClient": false,
-      "secret": "bastion-ssh-secret",
+      "secret": "{{ vault_keycloak_client_secret }}",
       "redirectUris": ["urn:ietf:wg:oauth:2.0:oob"],
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
@@ -67,7 +67,7 @@
       "lastName": "Bulushev",
       "email": "m.bulushev@bastion.local",
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "{{ vault_keycloak_user_password_m_bulushev }}", "temporary": true }],
       "realmRoles": ["bastion-pam-authentication"]
     },
     {
@@ -77,7 +77,7 @@
       "lastName": "One",
       "email": "admin1@bastion.local",
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "{{ vault_keycloak_user_password_admin1 }}", "temporary": true }],
       "realmRoles": ["bastion-pam-authentication"]
     },
     {
@@ -87,7 +87,7 @@
       "lastName": "One",
       "email": "dba1@bastion.local",
       "emailVerified": true,
-      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "credentials": [{ "type": "password", "value": "{{ vault_keycloak_user_password_dba1 }}", "temporary": true }],
       "realmRoles": ["bastion-pam-authentication"]
     }
   ]

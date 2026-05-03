@@ -5,8 +5,19 @@ domains = bastion.local
 [domain/bastion.local]
 id_provider = ldap
 auth_provider = ldap
-ldap_uri = ldap://192.168.56.20
+{% if bastion_ldap_use_starttls | default(false) %}
+ldap_uri = ldap://{{ secos_idp_ip }}
+ldap_search_base = dc=bastion,dc=local
+ldap_id_use_start_tls = True
+ldap_tls_reqcert = demand
+ldap_tls_cacert = /etc/pki/ca-trust/source/anchors/secos-ca.pem
+{% else %}
+# LAB ONLY — plaintext LDAP. Enable bastion_ldap_use_starttls once a CA
+# is provisioned and OpenLDAP is configured with a server cert. The
+# /etc/pki anchor above must be pre-populated by an out-of-band step.
+ldap_uri = ldap://{{ secos_idp_ip }}
 ldap_search_base = dc=bastion,dc=local
 ldap_id_use_start_tls = False
+{% endif %}
 cache_credentials = True
 enumerate = True
