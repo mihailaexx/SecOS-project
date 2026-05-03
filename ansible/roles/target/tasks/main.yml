@@ -135,7 +135,7 @@
     hour: "2"
     user: postgres
     job: >-
-      /usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-$(date +%F).sql.gz
+      /usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-$(date +\%F).sql.gz
       && find /mnt/backups/postgres/ -name "*.sql.gz" -mtime +7 -delete
 
 - name: Daily config backup cron

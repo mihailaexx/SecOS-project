@@ -112,7 +112,7 @@
     weekday: "0"
     user: root
     job: >-
-      tar czf /export/backups/homes/homes-$(date +%F).tar.gz -C / export/home/
+      tar czf /export/backups/homes/homes-$(date +\%F).tar.gz -C / export/home/
       && find /export/backups/homes/ -name "*.tar.gz" -mtime +7 -delete
 
 - name: Enable crond
