@@ -7,7 +7,7 @@
   hosts: all:!hypervisor
   tasks:
     - name: getenforce reports Enforcing
-      command: getenforce
+      ansible.builtin.command: getenforce
       register: ge
       changed_when: false
       failed_when: ge.stdout.strip() != 'Enforcing'
@@ -19,19 +19,19 @@
     # community.general.selogin, and an explicit row guards against an
     # upstream Fedora change to __default__'s mapping.
     - name: Read seusers map
-      slurp:
+      ansible.builtin.slurp:
         src: /etc/selinux/targeted/seusers
       register: seusers_file
 
     - name: Assert ansible → unconfined_u (explicit selogin row)
       vars:
         seusers: "{{ seusers_file.content | b64decode }}"
-      assert:
+      ansible.builtin.assert:
         that: "seusers is search('(?m)^ansible:unconfined_u:')"
         fail_msg: "ansible login is not pinned to unconfined_u in seusers:\n{{ seusers }}"
 
     - name: Assert legacy vagrant account is gone
-      command: getent passwd vagrant
+      ansible.builtin.command: getent passwd vagrant
       register: vagrant_passwd
       changed_when: false
       failed_when: vagrant_passwd.rc == 0
@@ -40,17 +40,25 @@
     # catch *fresh* AVCs introduced by recent role changes, not historical
     # ones that have already been remediated. `ausearch -ts recent` defaults
     # to 10min, which surfaces stale denials from before a fix was applied.
+    # ausearch rc 0 = matches found, rc 1 = no matches (clean run).
+    # Anything else (perm denied, auditd not running, missing tool) is a
+    # real error and must NOT be silently masked into a passing assert.
     - name: No new AVC denials in the last 2 minutes (excluding pam_keycloak_oidc)
-      shell: |
+      ansible.builtin.shell: |
         set -o pipefail
-        ausearch -m AVC -ts "$(date -d '2 minutes ago' '+%H:%M:%S')" 2>/dev/null \
-          | grep -v pam_keycloak_oidc \
-          | grep -E '^type=AVC' || true
+        out=$(ausearch -m AVC -ts "$(date -d '2 minutes ago' '+%H:%M:%S')" 2>/dev/null) || rc=$?
+        rc=${rc:-0}
+        if [[ "$rc" -ne 0 && "$rc" -ne 1 ]]; then
+          echo "AUSEARCH_FAILED rc=$rc" >&2
+          exit "$rc"
+        fi
+        printf '%s\n' "$out" | grep -v pam_keycloak_oidc | grep -E '^type=AVC' || true
       register: avc_recent
       changed_when: false
+      failed_when: avc_recent.rc not in [0, 1]
 
     - name: Assert AVC log clean
-      assert:
+      ansible.builtin.assert:
         that: "avc_recent.stdout == ''"
         fail_msg: "Recent AVC denials present:\n{{ avc_recent.stdout }}"
 
@@ -59,7 +67,7 @@
   hosts: storage
   tasks:
     - name: ls -Zd on exported trees
-      command: ls -Zd /export/home /export/backups
+      ansible.builtin.command: ls -Zd /export/home /export/backups
       register: ls_export
       changed_when: false
 
@@ -70,34 +78,38 @@
     # libsemanage rewrites the parent to home_root_t even with our explicit
     # user_home_dir_t rule, so test for the actual resolved labels.
     - name: Assert /export/home → home_root_t and /export/backups → public_content_t
-      assert:
+      ansible.builtin.assert:
         that:
           - "'home_root_t' in ls_export.stdout"
           - "'public_content_t' in ls_export.stdout"
         fail_msg: "Storage export labels missing — see ls -Zd output:\n{{ ls_export.stdout }}"
 
     - name: Per-user home dir labeled user_home_dir_t
-      command: ls -Zd /export/home/m.bulushev
+      ansible.builtin.command: ls -Zd /export/home/m.bulushev
       register: ls_userhome
       changed_when: false
 
     - name: Assert per-user home → user_home_dir_t
-      assert:
+      ansible.builtin.assert:
         that: "'user_home_dir_t' in ls_userhome.stdout"
         fail_msg: "/export/home/m.bulushev not labeled user_home_dir_t: {{ ls_userhome.stdout }}"
 
     - name: NFS exports advertise security_label
-      command: exportfs -v
+      ansible.builtin.command: exportfs -v
       register: exportfs_v
       changed_when: false
 
     # exportfs -v line-wraps long path/options pairs onto separate lines,
     # so the regex needs DOTALL ((?s)) to span newlines between path and options.
+    # Anchor each path to its own logical line. exportfs -v wraps long
+    # path/options onto two physical lines, so we permit a single line break
+    # but reject any *other* path appearing between the path and the option
+    # — that's what the original (?s).*? would let through.
     - name: Assert security_label on both exports
-      assert:
+      ansible.builtin.assert:
         that:
-          - "exportfs_v.stdout is search('(?s)/export/home.*?security_label')"
-          - "exportfs_v.stdout is search('(?s)/export/backups.*?security_label')"
+          - "exportfs_v.stdout is search('/export/home\\s+[^\\n]*\\n?\\s*[^\\n]*security_label')"
+          - "exportfs_v.stdout is search('/export/backups\\s+[^\\n]*\\n?\\s*[^\\n]*security_label')"
         fail_msg: "NFS exports missing security_label option:\n{{ exportfs_v.stdout }}"
 
 # ── SIS#6 bastion-side login confinement assertions ──
@@ -111,35 +123,49 @@
     # user's. sshd's pam_selinux is the real gate, so use sshd_t as `from`.
     # selinuxdefcon exits with rc=1 even on successful resolution (the answer
     # arrives via stdout). Gate on stdout content, not the exit code.
+    #
+    # Pre-check that the login user actually exists. selinuxdefcon falls
+    # back to the __default__ row when the username is unknown, so without
+    # this guard a missing user silently passes the assert below.
+    - name: Confirm m.bulushev exists in NSS
+      ansible.builtin.command: getent passwd m.bulushev
+      register: passwd_mbulushev
+      changed_when: false
+
     - name: Resolve m.bulushev login context (from sshd)
-      command: selinuxdefcon m.bulushev system_u:system_r:sshd_t:s0
+      ansible.builtin.command: selinuxdefcon m.bulushev system_u:system_r:sshd_t:s0
       register: id_user
       changed_when: false
       failed_when: id_user.stdout == '' or id_user.stderr != ''
 
     - name: Assert m.bulushev runs as user_u:user_r:user_t
-      assert:
+      ansible.builtin.assert:
         that: "'user_u:user_r:user_t' in id_user.stdout"
         fail_msg: "m.bulushev not confined to user_t: {{ id_user.stdout }}"
 
+    - name: Confirm admin1 exists in NSS
+      ansible.builtin.command: getent passwd admin1
+      register: passwd_admin1
+      changed_when: false
+
     - name: Resolve admin1 login context (from sshd)
-      command: selinuxdefcon admin1 system_u:system_r:sshd_t:s0
+      ansible.builtin.command: selinuxdefcon admin1 system_u:system_r:sshd_t:s0
       register: id_admin
       changed_when: false
       failed_when: id_admin.stdout == '' or id_admin.stderr != ''
 
     - name: Assert admin1 runs as staff_u:staff_r:staff_t
-      assert:
+      ansible.builtin.assert:
         that: "'staff_u:staff_r:staff_t' in id_admin.stdout"
         fail_msg: "admin1 not in staff_t shell: {{ id_admin.stdout }}"
 
     - name: staff_u extended with sysadm_r
-      command: semanage user -l
+      ansible.builtin.command: semanage user -l
       register: seuser_list
       changed_when: false
 
     - name: Assert staff_u has both staff_r and sysadm_r
-      assert:
+      ansible.builtin.assert:
         that:
           - "seuser_list.stdout is search('staff_u.*staff_r')"
           - "seuser_list.stdout is search('staff_u.*sysadm_r')"
@@ -150,12 +176,12 @@
     # explicit mount option required — and reports `seclabel` in the active
     # options once labels are flowing.
     - name: backup mount carries seclabel
-      command: findmnt -n -o OPTIONS /mnt/backups
+      ansible.builtin.command: findmnt -n -o OPTIONS /mnt/backups
       register: mnt_opts
       changed_when: false
 
     - name: Assert seclabel on /mnt/backups
-      assert:
+      ansible.builtin.assert:
         that: "'seclabel' in mnt_opts.stdout"
         fail_msg: "/mnt/backups missing seclabel — NFSv4 SELinux labels not active: {{ mnt_opts.stdout }}"
 
@@ -164,14 +190,20 @@
   hosts: target
   tasks:
     # See note in the bastion play above: use selinuxdefcon, not runuser.
+    # Same fallback-to-__default__ trap, so confirm the user exists first.
+    - name: Confirm dba1 exists in NSS
+      ansible.builtin.command: getent passwd dba1
+      register: passwd_dba1
+      changed_when: false
+
     - name: Resolve dba1 login context (from sshd)
-      command: selinuxdefcon dba1 system_u:system_r:sshd_t:s0
+      ansible.builtin.command: selinuxdefcon dba1 system_u:system_r:sshd_t:s0
       register: id_dba
       changed_when: false
       failed_when: id_dba.stdout == '' or id_dba.stderr != ''
 
     - name: Assert dba1 runs as staff_u:staff_r:staff_t
-      assert:
+      ansible.builtin.assert:
         that: "'staff_u:staff_r:staff_t' in id_dba.stdout"
         fail_msg: "dba1 not in staff_t shell: {{ id_dba.stdout }}"
 
@@ -180,61 +212,61 @@
   hosts: storage
   tasks:
     - name: Check RAID1 array
-      command: cat /proc/mdstat
+      ansible.builtin.command: cat /proc/mdstat
       register: mdstat
       changed_when: false
 
     - name: Verify RAID1 is active
-      assert:
+      ansible.builtin.assert:
         that: "'md0 : active raid1' in mdstat.stdout"
         fail_msg: "RAID1 array md0 not active"
 
     - name: Check /export/home mount
-      command: findmnt -n -o FSTYPE /export/home
+      ansible.builtin.command: findmnt -n -o FSTYPE /export/home
       register: home_mount
       changed_when: false
 
     - name: Verify /export/home is XFS
-      assert:
+      ansible.builtin.assert:
         that: "home_mount.stdout | trim == 'xfs'"
         fail_msg: "/export/home is not XFS"
 
     - name: Check NFS exports
-      command: exportfs -v
+      ansible.builtin.command: exportfs -v
       register: exports
       changed_when: false
 
     - name: Verify NFS exports configured
-      assert:
+      ansible.builtin.assert:
         that: "'/export/home' in exports.stdout"
         fail_msg: "NFS /export/home not exported"
 
     - name: Check NFS service running
-      systemd:
+      ansible.builtin.systemd:
         name: nfs-server
         state: started
       check_mode: true
       register: nfs_svc
 
     - name: Verify NFS service
-      assert:
+      ansible.builtin.assert:
         that: "nfs_svc.status.ActiveState == 'active'"
         fail_msg: "NFS server not running"
 
     - name: Check crond running
-      systemd:
+      ansible.builtin.systemd:
         name: crond
         state: started
       check_mode: true
       register: crond_svc
 
     - name: Verify crond
-      assert:
+      ansible.builtin.assert:
         that: "crond_svc.status.ActiveState == 'active'"
         fail_msg: "crond not running"
 
     - name: Check backup directories exist
-      stat:
+      ansible.builtin.stat:
         path: "{{ item }}"
       loop:
         - /export/backups/postgres
@@ -244,7 +276,7 @@
       register: backup_dirs
 
     - name: Verify backup directories
-      assert:
+      ansible.builtin.assert:
         that: "item.stat.exists"
         fail_msg: "{{ item.item }} missing"
       loop: "{{ backup_dirs.results }}"
@@ -252,70 +284,70 @@
         label: "{{ item.item }}"
 
     - name: Check auditd running
-      systemd:
+      ansible.builtin.systemd:
         name: auditd
         state: started
       check_mode: true
       register: auditd_svc
 
     - name: Verify auditd
-      assert:
+      ansible.builtin.assert:
         that: "auditd_svc.status.ActiveState == 'active'"
         fail_msg: "auditd not running"
 
     - name: Check kernel audit=1 parameter
-      command: grep -o audit=1 /proc/cmdline
+      ansible.builtin.command: grep -o audit=1 /proc/cmdline
       register: audit_cmdline
       changed_when: false
       failed_when: false
 
     - name: Verify audit=1 in /proc/cmdline
-      assert:
-        that: "audit_cmdline.stdout == 'audit=1'"
+      ansible.builtin.assert:
+        that: "audit_cmdline.stdout | trim == 'audit=1'"
         fail_msg: "kernel boot arg audit=1 missing — file watches inert until reboot"
 
     - name: Check journald audit socket masked
-      command: systemctl is-enabled systemd-journald-audit.socket
+      ansible.builtin.command: systemctl is-enabled systemd-journald-audit.socket
       register: jas_state
       changed_when: false
       failed_when: false
 
     - name: Verify journald audit socket masked
-      assert:
+      ansible.builtin.assert:
         that: "jas_state.stdout | trim == 'masked'"
         fail_msg: "systemd-journald-audit.socket not masked — journald may steal kernel audit_pid"
 
     - name: Check journal-remote socket
-      systemd:
+      ansible.builtin.systemd:
         name: systemd-journal-remote.socket
         state: started
       check_mode: true
       register: jrs_socket
 
     - name: Verify journal-remote socket
-      assert:
+      ansible.builtin.assert:
         that: "jrs_socket.status.ActiveState == 'active'"
         fail_msg: "systemd-journal-remote.socket not active"
 
     - name: Check journal-remote service
-      systemd:
+      ansible.builtin.systemd:
         name: systemd-journal-remote.service
         state: started
       check_mode: true
       register: jrs_service
 
     - name: Verify journal-remote service
-      assert:
+      ansible.builtin.assert:
         that: "jrs_service.status.ActiveState in ['active', 'activating']"
         fail_msg: "systemd-journal-remote.service not active"
 
     - name: Check mdadm detail
-      command: mdadm --detail /dev/md0
+      ansible.builtin.command: mdadm --detail /dev/md0
       register: mdadm_detail
       changed_when: false
 
     - name: Verify mdadm clean state (2 active, 0 failed)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'State : clean' in mdadm_detail.stdout"
           - "'Active Devices : 2' in mdadm_detail.stdout"
@@ -323,37 +355,37 @@
         fail_msg: "RAID1 not clean"
 
     - name: Check showmount lists exports
-      command: showmount -e localhost
+      ansible.builtin.command: showmount -e localhost
       register: showmount_out
       changed_when: false
 
     - name: Verify both NFS exports listed
-      assert:
+      ansible.builtin.assert:
         that:
           - "'/export/home' in showmount_out.stdout"
           - "'/export/backups' in showmount_out.stdout"
         fail_msg: "NFS exports incomplete"
 
     - name: Check storage firewall internal-bastion zone
-      command: firewall-cmd --zone=internal-bastion --list-all
+      ansible.builtin.command: firewall-cmd --zone=internal-bastion --list-all
       register: fw_storage
       changed_when: false
 
     - name: Verify storage firewall ports (NFS + journal-remote)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'nfs' in fw_storage.stdout"
           - "'19532/tcp' in fw_storage.stdout"
         fail_msg: "internal-bastion zone missing nfs service or 19532"
 
     - name: Check storage root crontab
-      command: crontab -l
+      ansible.builtin.command: crontab -l
       register: storage_crontab
       changed_when: false
       failed_when: false
 
     - name: Verify storage cron entries (backup-homes + prune-remote-journals)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'backup-homes' in storage_crontab.stdout"
           - "'prune-remote-journals' in storage_crontab.stdout"
@@ -367,18 +399,18 @@
     # user (post-58fdb9f). The host's PID 1 doesn't see it, so query it
     # against the user's session bus via systemctl --user --machine=secos@.
     - name: Check secos-idp rootless user unit running
-      command: systemctl --user --machine=secos@.host is-active secos-idp.service
+      ansible.builtin.command: systemctl --user --machine=secos@.host is-active secos-idp.service
       register: idp_svc
       changed_when: false
       failed_when: false
 
     - name: Verify secos-idp active
-      assert:
+      ansible.builtin.assert:
         that: "idp_svc.stdout | trim == 'active'"
         fail_msg: "secos-idp stack (OpenLDAP + Keycloak containers) not running: {{ idp_svc.stdout }}"
 
     - name: Test LDAP search
-      command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(uid=m.bulushev)" uid
+      ansible.builtin.command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(uid=m.bulushev)" uid
       register: ldap_search
       changed_when: false
       retries: 10
@@ -386,12 +418,12 @@
       until: ldap_search.rc == 0
 
     - name: Verify LDAP user exists
-      assert:
+      ansible.builtin.assert:
         that: "'uid: m.bulushev' in ldap_search.stdout"
         fail_msg: "LDAP user m.bulushev not found"
 
     - name: Test Keycloak HTTP
-      uri:
+      ansible.builtin.uri:
         url: http://localhost:8080/realms/bastion/.well-known/openid-configuration
         return_content: false
         status_code: 200
@@ -401,85 +433,85 @@
       until: kc_http.status == 200
 
     - name: Verify Keycloak realm
-      assert:
+      ansible.builtin.assert:
         that: "kc_http.status == 200"
         fail_msg: "Keycloak bastion realm not responding"
 
     - name: Check NFS backup mount
-      command: findmnt -n -o FSTYPE /mnt/backups
+      ansible.builtin.command: findmnt -n -o FSTYPE /mnt/backups
       register: backup_mount
       changed_when: false
 
     - name: Verify NFS backup mount
-      assert:
+      ansible.builtin.assert:
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
 
     - name: Check IDP auditd running
-      systemd:
+      ansible.builtin.systemd:
         name: auditd
         state: started
       check_mode: true
       register: idp_auditd_svc
 
     - name: Verify IDP auditd
-      assert:
+      ansible.builtin.assert:
         that: "idp_auditd_svc.status.ActiveState == 'active'"
         fail_msg: "auditd not running on idp-node"
 
     - name: Check IDP kernel audit=1
-      command: grep -o audit=1 /proc/cmdline
+      ansible.builtin.command: grep -o audit=1 /proc/cmdline
       register: idp_audit_cmdline
       changed_when: false
       failed_when: false
 
     - name: Verify IDP audit=1
-      assert:
-        that: "idp_audit_cmdline.stdout == 'audit=1'"
+      ansible.builtin.assert:
+        that: "idp_audit_cmdline.stdout | trim == 'audit=1'"
         fail_msg: "audit=1 missing on idp-node"
 
     - name: Check IDP journald audit socket masked
-      command: systemctl is-enabled systemd-journald-audit.socket
+      ansible.builtin.command: systemctl is-enabled systemd-journald-audit.socket
       register: idp_jas_state
       changed_when: false
       failed_when: false
 
     - name: Verify IDP journald audit socket masked
-      assert:
+      ansible.builtin.assert:
         that: "idp_jas_state.stdout | trim == 'masked'"
         fail_msg: "journald-audit.socket not masked on idp-node"
 
     - name: Check IDP journal-upload running
-      systemd:
+      ansible.builtin.systemd:
         name: systemd-journal-upload.service
         state: started
       check_mode: true
       register: idp_ju_svc
 
     - name: Verify IDP journal-upload
-      assert:
+      ansible.builtin.assert:
         that: "idp_ju_svc.status.ActiveState == 'active'"
         fail_msg: "journal-upload not running on idp-node"
 
     - name: Check IDP firewall (all zones)
-      command: firewall-cmd --list-all-zones
+      ansible.builtin.command: firewall-cmd --list-all-zones
       register: fw_idp
       changed_when: false
 
     - name: Verify IDP firewall (Keycloak 8080 + LDAP 389)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'8080/tcp' in fw_idp.stdout"
           - "'389/tcp' in fw_idp.stdout or 'ldap' in fw_idp.stdout"
         fail_msg: "IDP firewall missing 8080 or 389/ldap"
 
     - name: Check all 3 LDAP users present
-      command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(|(uid=m.bulushev)(uid=admin1)(uid=dba1))" uid
+      ansible.builtin.command: ldapsearch -x -H ldap://localhost -b "dc=bastion,dc=local" "(|(uid=m.bulushev)(uid=admin1)(uid=dba1))" uid
       register: ldap_users
       changed_when: false
 
     - name: Verify all 3 LDAP users
-      assert:
+      ansible.builtin.assert:
         that:
           - "'uid: m.bulushev' in ldap_users.stdout"
           - "'uid: admin1' in ldap_users.stdout"
@@ -487,13 +519,13 @@
         fail_msg: "Not all 3 LDAP users found"
 
     - name: Check IDP root crontab
-      command: crontab -l
+      ansible.builtin.command: crontab -l
       register: idp_crontab
       changed_when: false
       failed_when: false
 
     - name: Verify IDP cron entries (backup-ldap + backup-keycloak + backup-configs)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'backup-ldap' in idp_crontab.stdout"
           - "'backup-keycloak' in idp_crontab.stdout"
@@ -502,16 +534,33 @@
 
     - name: LDAP backup smoke
       block:
-        - name: Trigger ldapsearch-based backup (matches role's backup script)
-          shell: |
+        # Sanity-check the rootdn bind first — pipefail-less gzip will
+        # otherwise swallow an "Invalid credentials" error and produce an
+        # empty .gz that passes `gunzip -t` but holds zero DN entries.
+        - name: Verify rootdn bind works before exercising backup
+          ansible.builtin.shell: |
+            set -o pipefail
             ldapsearch -x -H ldap://127.0.0.1:389 \
-              -D "cn=admin,dc=bastion,dc=local" -w admin \
+              -D "cn=admin,dc=bastion,dc=local" \
+              -y /var/lib/secos/secos/idp/openldap/admin_password \
+              -b "dc=bastion,dc=local" -s base 1>/dev/null
+          changed_when: false
+
+        # Use a remote-side $(date +%s) so retried plays don't collide on a
+        # single controller-evaluated timestamp, and read the rootdn password
+        # from disk via -y to match the production backup script.
+        - name: Trigger ldapsearch-based backup (matches role's backup script)
+          ansible.builtin.shell: |
+            set -o pipefail
+            ldapsearch -x -H ldap://127.0.0.1:389 \
+              -D "cn=admin,dc=bastion,dc=local" \
+              -y /var/lib/secos/secos/idp/openldap/admin_password \
               -b "dc=bastion,dc=local" \
-              | gzip > /mnt/backups/ldap/ldap-test-{{ lookup('pipe', 'date +%s') }}.ldif.gz
+              | gzip > /mnt/backups/ldap/ldap-test-$(date +%s).ldif.gz
           changed_when: false
 
         - name: Verify LDAP backup is recoverable
-          shell: |
+          ansible.builtin.shell: |
             f=$(ls -t /mnt/backups/ldap/ldap-test-*.ldif.gz | head -1)
             test -s "$f" || exit 1
             gunzip -t "$f" || exit 1
@@ -520,138 +569,141 @@
           changed_when: false
 
         - name: Assert LDAP backup contains entries
-          assert:
+          ansible.builtin.assert:
             that: "ldap_dn_count.stdout | int >= 4"
             fail_msg: "LDAP backup has < 4 dn entries (expected base + 3 users)"
       always:
-        - name: Cleanup LDAP backup smoke artifact
-          shell: rm -f /mnt/backups/ldap/ldap-test-*.ldif.gz
+        # Only clean up on success — keep the artifact on the NFS share when
+        # the test fails so post-mortem can inspect the corrupt/short backup.
+        - name: Cleanup LDAP backup smoke artifact (success only)
+          ansible.builtin.shell: rm -f /mnt/backups/ldap/ldap-test-*.ldif.gz
           changed_when: false
+          when: ansible_failed_task is not defined
 
 # ── LB node tests ──
 - name: Test lb-node
   hosts: lb
   tasks:
     - name: Check HAProxy running
-      systemd:
+      ansible.builtin.systemd:
         name: haproxy
         state: started
       check_mode: true
       register: haproxy_svc
 
     - name: Verify HAProxy
-      assert:
+      ansible.builtin.assert:
         that: "haproxy_svc.status.ActiveState == 'active'"
         fail_msg: "HAProxy not running"
 
     - name: Check HAProxy listens on port 22
-      command: ss -tlnp
+      ansible.builtin.command: ss -tlnp
       register: ss_out
       changed_when: false
 
     - name: Verify HAProxy on port 22
-      assert:
+      ansible.builtin.assert:
         that: "':22 ' in ss_out.stdout"
         fail_msg: "Nothing listening on port 22"
 
     - name: Check sshd on port 2222
-      assert:
+      ansible.builtin.assert:
         that: "':2222 ' in ss_out.stdout"
         fail_msg: "sshd not listening on management port 2222"
 
     - name: Check firewalld running
-      systemd:
+      ansible.builtin.systemd:
         name: firewalld
         state: started
       check_mode: true
       register: fw_svc
 
     - name: Verify firewalld
-      assert:
+      ansible.builtin.assert:
         that: "fw_svc.status.ActiveState == 'active'"
         fail_msg: "firewalld not running"
 
     - name: Check NFS backup mount
-      command: findmnt -n -o FSTYPE /mnt/backups
+      ansible.builtin.command: findmnt -n -o FSTYPE /mnt/backups
       register: backup_mount
       changed_when: false
 
     - name: Verify NFS backup mount
-      assert:
+      ansible.builtin.assert:
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
 
     - name: Check LB auditd running
-      systemd:
+      ansible.builtin.systemd:
         name: auditd
         state: started
       check_mode: true
       register: lb_auditd_svc
 
     - name: Verify LB auditd
-      assert:
+      ansible.builtin.assert:
         that: "lb_auditd_svc.status.ActiveState == 'active'"
         fail_msg: "auditd not running on lb-node"
 
     - name: Check LB kernel audit=1
-      command: grep -o audit=1 /proc/cmdline
+      ansible.builtin.command: grep -o audit=1 /proc/cmdline
       register: lb_audit_cmdline
       changed_when: false
       failed_when: false
 
     - name: Verify LB audit=1
-      assert:
-        that: "lb_audit_cmdline.stdout == 'audit=1'"
+      ansible.builtin.assert:
+        that: "lb_audit_cmdline.stdout | trim == 'audit=1'"
         fail_msg: "audit=1 missing on lb-node"
 
     - name: Check LB journald audit socket masked
-      command: systemctl is-enabled systemd-journald-audit.socket
+      ansible.builtin.command: systemctl is-enabled systemd-journald-audit.socket
       register: lb_jas_state
       changed_when: false
       failed_when: false
 
     - name: Verify LB journald audit socket masked
-      assert:
+      ansible.builtin.assert:
         that: "lb_jas_state.stdout | trim == 'masked'"
         fail_msg: "journald-audit.socket not masked on lb-node"
 
     - name: Check LB journal-upload running
-      systemd:
+      ansible.builtin.systemd:
         name: systemd-journal-upload.service
         state: started
       check_mode: true
       register: lb_ju_svc
 
     - name: Verify LB journal-upload
-      assert:
+      ansible.builtin.assert:
         that: "lb_ju_svc.status.ActiveState == 'active'"
         fail_msg: "journal-upload not running on lb-node"
 
     - name: Check LB firewall
-      command: firewall-cmd --list-all
+      ansible.builtin.command: firewall-cmd --list-all
       register: fw_lb
       changed_when: false
 
     - name: Verify LB firewall (HAProxy 22 + mgmt 2222)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'22/tcp' in fw_lb.stdout or 'ssh' in fw_lb.stdout"
           - "'2222/tcp' in fw_lb.stdout"
         fail_msg: "LB firewall missing 22 or 2222"
 
     - name: Check LB root crontab
-      command: crontab -l
+      ansible.builtin.command: crontab -l
       register: lb_crontab
       changed_when: false
       failed_when: false
 
     - name: Verify LB cron entries (backup-configs)
-      assert:
+      ansible.builtin.assert:
         that: "'backup-configs' in lb_crontab.stdout"
         fail_msg: "LB backup-configs cron missing"
 
     - name: Validate HAProxy config
-      command: haproxy -c -f /etc/haproxy/haproxy.cfg
+      ansible.builtin.command: haproxy -c -f /etc/haproxy/haproxy.cfg
       changed_when: false
 
 # ── Bastion node tests ──
@@ -659,203 +711,203 @@
   hosts: bastions
   tasks:
     - name: Check SSSD running
-      systemd:
+      ansible.builtin.systemd:
         name: sssd
         state: started
       check_mode: true
       register: sssd_svc
 
     - name: Verify SSSD
-      assert:
+      ansible.builtin.assert:
         that: "sssd_svc.status.ActiveState == 'active'"
         fail_msg: "SSSD not running"
 
     - name: Check autofs running
-      systemd:
+      ansible.builtin.systemd:
         name: autofs
         state: started
       check_mode: true
       register: autofs_svc
 
     - name: Verify autofs
-      assert:
+      ansible.builtin.assert:
         that: "autofs_svc.status.ActiveState == 'active'"
         fail_msg: "autofs not running"
 
     - name: Check sshd running
-      systemd:
+      ansible.builtin.systemd:
         name: sshd
         state: started
       check_mode: true
       register: sshd_svc
 
     - name: Verify sshd
-      assert:
+      ansible.builtin.assert:
         that: "sshd_svc.status.ActiveState == 'active'"
         fail_msg: "sshd not running"
 
     - name: Check sshd drop-in exists
-      stat:
+      ansible.builtin.stat:
         path: /etc/ssh/sshd_config.d/40-bastion-auth.conf
       register: sshd_dropin
 
     - name: Verify sshd drop-in
-      assert:
+      ansible.builtin.assert:
         that: "sshd_dropin.stat.exists"
         fail_msg: "sshd bastion auth drop-in missing"
 
     - name: Check pam-keycloak-oidc binary
-      stat:
+      ansible.builtin.stat:
         path: /opt/pam-keycloak-oidc/pam-keycloak-oidc
       register: pam_kc
 
     - name: Verify pam-keycloak-oidc
-      assert:
+      ansible.builtin.assert:
         that: "pam_kc.stat.exists and pam_kc.stat.mode == '0755'"
         fail_msg: "pam-keycloak-oidc binary missing or wrong perms"
 
     - name: Check LDAP user resolution via SSSD
-      command: getent passwd m.bulushev
+      ansible.builtin.command: getent passwd m.bulushev
       register: getent_user
       changed_when: false
 
     - name: Verify LDAP user resolves
-      assert:
+      ansible.builtin.assert:
         that: "'m.bulushev' in getent_user.stdout"
         fail_msg: "SSSD can't resolve m.bulushev from LDAP"
 
     - name: Check firewalld running
-      systemd:
+      ansible.builtin.systemd:
         name: firewalld
         state: started
       check_mode: true
       register: fw_svc
 
     - name: Verify firewalld
-      assert:
+      ansible.builtin.assert:
         that: "fw_svc.status.ActiveState == 'active'"
         fail_msg: "firewalld not running"
 
     - name: Check NFS backup mount
-      command: findmnt -n -o FSTYPE /mnt/backups
+      ansible.builtin.command: findmnt -n -o FSTYPE /mnt/backups
       register: backup_mount
       changed_when: false
 
     - name: Verify NFS backup mount
-      assert:
+      ansible.builtin.assert:
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
 
     - name: Check bastion auditd running
-      systemd:
+      ansible.builtin.systemd:
         name: auditd
         state: started
       check_mode: true
       register: b_auditd_svc
 
     - name: Verify bastion auditd
-      assert:
+      ansible.builtin.assert:
         that: "b_auditd_svc.status.ActiveState == 'active'"
         fail_msg: "auditd not running on bastion"
 
     - name: Check bastion kernel audit=1
-      command: grep -o audit=1 /proc/cmdline
+      ansible.builtin.command: grep -o audit=1 /proc/cmdline
       register: b_audit_cmdline
       changed_when: false
       failed_when: false
 
     - name: Verify bastion audit=1
-      assert:
-        that: "b_audit_cmdline.stdout == 'audit=1'"
+      ansible.builtin.assert:
+        that: "b_audit_cmdline.stdout | trim == 'audit=1'"
         fail_msg: "audit=1 missing on bastion"
 
     - name: Check bastion journald audit socket masked
-      command: systemctl is-enabled systemd-journald-audit.socket
+      ansible.builtin.command: systemctl is-enabled systemd-journald-audit.socket
       register: b_jas_state
       changed_when: false
       failed_when: false
 
     - name: Verify bastion journald audit socket masked
-      assert:
+      ansible.builtin.assert:
         that: "b_jas_state.stdout | trim == 'masked'"
         fail_msg: "journald-audit.socket not masked on bastion"
 
     - name: Check bastion journal-upload running
-      systemd:
+      ansible.builtin.systemd:
         name: systemd-journal-upload.service
         state: started
       check_mode: true
       register: b_ju_svc
 
     - name: Verify bastion journal-upload
-      assert:
+      ansible.builtin.assert:
         that: "b_ju_svc.status.ActiveState == 'active'"
         fail_msg: "journal-upload not running on bastion"
 
     - name: Check bastion oddjobd running
-      systemd:
+      ansible.builtin.systemd:
         name: oddjobd
         state: started
       check_mode: true
       register: b_oj_svc
 
     - name: Verify bastion oddjobd
-      assert:
+      ansible.builtin.assert:
         that: "b_oj_svc.status.ActiveState == 'active'"
         fail_msg: "oddjobd not running on bastion"
 
     - name: Check authselect profile
-      command: authselect current
+      ansible.builtin.command: authselect current
       register: authselect_out
       changed_when: false
 
     - name: Verify authselect sssd with-mkhomedir
-      assert:
+      ansible.builtin.assert:
         that:
           - "'sssd' in authselect_out.stdout"
           - "'with-mkhomedir' in authselect_out.stdout"
         fail_msg: "authselect not configured for sssd with-mkhomedir"
 
     - name: Check pam-keycloak-oidc loaded in sshd PAM stack
-      command: grep -c pam-keycloak-oidc /etc/pam.d/sshd
+      ansible.builtin.command: grep -c pam-keycloak-oidc /etc/pam.d/sshd
       register: pam_kc_count
       changed_when: false
       failed_when: false
 
     - name: Verify pam-keycloak-oidc in /etc/pam.d/sshd
-      assert:
+      ansible.builtin.assert:
         that: "pam_kc_count.stdout | int >= 1"
         fail_msg: "pam-keycloak-oidc not in /etc/pam.d/sshd"
 
     - name: Check pam-keycloak-oidc binary executes
-      command: /opt/pam-keycloak-oidc/pam-keycloak-oidc --help
+      ansible.builtin.command: /opt/pam-keycloak-oidc/pam-keycloak-oidc --help
       register: pam_kc_help
       changed_when: false
       failed_when: false
 
     - name: Verify pam-keycloak-oidc binary runs (not blocked by linker/SELinux)
-      assert:
+      ansible.builtin.assert:
         that: "pam_kc_help.rc != 127 and pam_kc_help.rc != 126"
         fail_msg: "pam-keycloak-oidc binary won't execute (linker / SELinux denial)"
 
     # ── SIS#6: custom restricted SELinux policy assertions ──
     - name: List installed SELinux modules
-      command: semodule -l
+      ansible.builtin.command: semodule -l
       register: semodule_list
       changed_when: false
 
     - name: Verify custom pam_keycloak_oidc SELinux module is loaded
-      assert:
+      ansible.builtin.assert:
         that: "'pam_keycloak_oidc' in semodule_list.stdout"
         fail_msg: "Custom SELinux module pam_keycloak_oidc is not installed"
 
     - name: List SELinux types defined by the custom policy
-      command: seinfo -t
+      ansible.builtin.command: seinfo -t
       register: seinfo_types
       changed_when: false
 
     - name: Verify custom domain + file types + port type exist
-      assert:
+      ansible.builtin.assert:
         that:
           - "'pam_keycloak_oidc_t' in seinfo_types.stdout"
           - "'pam_keycloak_oidc_exec_t' in seinfo_types.stdout"
@@ -864,59 +916,60 @@
           - "'pam_keycloak_oidc_port_t' in seinfo_types.stdout"
         fail_msg: "Custom SELinux types missing — check pam_keycloak_oidc.te"
 
-    - name: Verify pam_keycloak_oidc_t is NOT permissive (must be enforcing)
-      command: semodule --list-modules=full
-      register: semodule_full
-      changed_when: false
-
+    # Permissive domains are tracked by semanage, not in the loaded-module
+    # list, so listing modules tells us nothing useful. The semanage check
+    # below is the real assertion.
     - name: Check no permissive entry for pam_keycloak_oidc
-      shell: |
+      ansible.builtin.shell: |
         semanage permissive -l 2>/dev/null | grep -E '^pam_keycloak_oidc_t$' || true
       register: permissive_check
       changed_when: false
 
     - name: Assert custom domain runs in enforcing mode
-      assert:
+      ansible.builtin.assert:
         that: "permissive_check.stdout == ''"
         fail_msg: "pam_keycloak_oidc_t is permissive — SIS#6 requires restricted enforcing rules"
 
     - name: Verify custom port type is bound to 8080/tcp
-      command: semanage port -l
+      ansible.builtin.command: semanage port -l
       register: semanage_ports
       changed_when: false
 
+    # Anchor 8080 with word boundaries so this doesn't pass on substring
+    # matches (18080, 80800, etc.) inside the port-label line.
     - name: Assert 8080/tcp is labeled pam_keycloak_oidc_port_t
-      assert:
-        that: "'pam_keycloak_oidc_port_t' in semanage_ports.stdout and '8080' in (semanage_ports.stdout_lines | select('search', 'pam_keycloak_oidc_port_t') | list | join(' '))"
+      ansible.builtin.assert:
+        that:
+          - "semanage_ports.stdout_lines | select('search', '^pam_keycloak_oidc_port_t\\\\b.*\\\\btcp\\\\b.*\\\\b8080\\\\b') | list | length >= 1"
         fail_msg: "Port 8080/tcp is not labeled pam_keycloak_oidc_port_t"
 
     - name: Verify pam-keycloak-oidc binary has _exec_t label
-      command: stat -c '%C' /opt/pam-keycloak-oidc/pam-keycloak-oidc
+      ansible.builtin.command: stat -c '%C' /opt/pam-keycloak-oidc/pam-keycloak-oidc
       register: stat_bin
       changed_when: false
 
     - name: Assert binary labeled pam_keycloak_oidc_exec_t
-      assert:
+      ansible.builtin.assert:
         that: "'pam_keycloak_oidc_exec_t' in stat_bin.stdout"
         fail_msg: "Binary not labeled pam_keycloak_oidc_exec_t — restorecon may have failed"
 
     - name: Verify config file has _conf_t label
-      command: stat -c '%C' /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
+      ansible.builtin.command: stat -c '%C' /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
       register: stat_cfg
       changed_when: false
 
     - name: Assert config labeled pam_keycloak_oidc_conf_t
-      assert:
+      ansible.builtin.assert:
         that: "'pam_keycloak_oidc_conf_t' in stat_cfg.stdout"
         fail_msg: "Config not labeled pam_keycloak_oidc_conf_t"
 
     - name: Check all 3 LDAP users resolve via SSSD
-      command: getent passwd m.bulushev admin1 dba1
+      ansible.builtin.command: getent passwd m.bulushev admin1 dba1
       register: getent_all
       changed_when: false
 
     - name: Verify all 3 LDAP users resolve
-      assert:
+      ansible.builtin.assert:
         that:
           - "'m.bulushev' in getent_all.stdout"
           - "'admin1' in getent_all.stdout"
@@ -924,66 +977,66 @@
         fail_msg: "Not all 3 LDAP users resolve via SSSD"
 
     - name: Check id command for m.bulushev
-      command: id m.bulushev
+      ansible.builtin.command: id m.bulushev
       register: id_mb
       changed_when: false
 
     - name: Verify m.bulushev gid=2000 (bastion-users)
-      assert:
+      ansible.builtin.assert:
         that: "'gid=2000' in id_mb.stdout"
         fail_msg: "m.bulushev not in bastion-users group"
 
     - name: Check id command for admin1
-      command: id admin1
+      ansible.builtin.command: id admin1
       register: id_a1
       changed_when: false
 
     - name: Verify admin1 gid=2001 (bastion-admins)
-      assert:
+      ansible.builtin.assert:
         that: "'gid=2001' in id_a1.stdout"
         fail_msg: "admin1 not in bastion-admins group"
 
     - name: Check id command for dba1
-      command: id dba1
+      ansible.builtin.command: id dba1
       register: id_d1
       changed_when: false
 
     - name: Verify dba1 gid=2002 (dba)
-      assert:
+      ansible.builtin.assert:
         that: "'gid=2002' in id_d1.stdout"
         fail_msg: "dba1 not in dba group"
 
     - name: Check Keycloak well-known reachable from bastion
-      uri:
-        url: http://192.168.56.20:8080/realms/bastion/.well-known/openid-configuration
+      ansible.builtin.uri:
+        url: "http://{{ secos_idp_ip }}:8080/realms/bastion/.well-known/openid-configuration"
         return_content: false
         status_code: 200
       register: kc_from_bastion
 
     - name: Verify Keycloak well-known returns 200
-      assert:
+      ansible.builtin.assert:
         that: "kc_from_bastion.status == 200"
         fail_msg: "Keycloak well-known endpoint not reachable from bastion"
 
     - name: Check bastion firewall (all zones, including rich rules)
-      command: firewall-cmd --list-all-zones
+      ansible.builtin.command: firewall-cmd --list-all-zones
       register: fw_bastion
       changed_when: false
 
     - name: Verify bastion firewall allows SSH (rich rule or port)
-      assert:
+      ansible.builtin.assert:
         that:
           - "'port=\"22\"' in fw_bastion.stdout or '22/tcp' in fw_bastion.stdout"
         fail_msg: "Bastion firewall missing SSH (no port=22 rich rule and no 22/tcp)"
 
     - name: Check bastion root crontab
-      command: crontab -l
+      ansible.builtin.command: crontab -l
       register: bastion_crontab
       changed_when: false
       failed_when: false
 
     - name: Verify bastion cron entries (backup-configs)
-      assert:
+      ansible.builtin.assert:
         that: "'backup-configs' in bastion_crontab.stdout"
         fail_msg: "Bastion backup-configs cron missing"
 
@@ -992,174 +1045,185 @@
   hosts: target
   tasks:
     - name: Check dedicated disk mount
-      command: findmnt -n -o FSTYPE /var/lib/pgsql
+      ansible.builtin.command: findmnt -n -o FSTYPE /var/lib/pgsql
       register: pg_mount
       changed_when: false
 
     - name: Verify PostgreSQL data disk
-      assert:
+      ansible.builtin.assert:
         that: "pg_mount.stdout | trim == 'xfs'"
         fail_msg: "/var/lib/pgsql not XFS-mounted"
 
     - name: Check PostgreSQL running
-      systemd:
+      ansible.builtin.systemd:
         name: postgresql-16
         state: started
       check_mode: true
       register: pg_svc
 
     - name: Verify PostgreSQL
-      assert:
+      ansible.builtin.assert:
         that: "pg_svc.status.ActiveState == 'active'"
         fail_msg: "PostgreSQL 16 not running"
 
     - name: Check dba1 role exists
-      shell: sudo -u postgres /usr/pgsql-16/bin/psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='dba1'"
+      ansible.builtin.shell: sudo -u postgres /usr/pgsql-16/bin/psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='dba1'"
       register: dba_role
       changed_when: false
 
     - name: Verify dba1 role
-      assert:
+      ansible.builtin.assert:
         that: "'1' in dba_role.stdout"
         fail_msg: "PostgreSQL dba1 role missing"
 
     - name: Check firewalld running
-      systemd:
+      ansible.builtin.systemd:
         name: firewalld
         state: started
       check_mode: true
       register: fw_svc
 
     - name: Verify firewalld
-      assert:
+      ansible.builtin.assert:
         that: "fw_svc.status.ActiveState == 'active'"
         fail_msg: "firewalld not running"
 
     - name: Check NFS backup mount
-      command: findmnt -n -o FSTYPE /mnt/backups
+      ansible.builtin.command: findmnt -n -o FSTYPE /mnt/backups
       register: backup_mount
       changed_when: false
 
     - name: Verify NFS backup mount
-      assert:
+      ansible.builtin.assert:
         that: "backup_mount.stdout | trim == 'nfs4' or backup_mount.stdout | trim == 'nfs'"
         fail_msg: "/mnt/backups not NFS-mounted"
 
     - name: Check target auditd running
-      systemd:
+      ansible.builtin.systemd:
         name: auditd
         state: started
       check_mode: true
       register: t_auditd_svc
 
     - name: Verify target auditd
-      assert:
+      ansible.builtin.assert:
         that: "t_auditd_svc.status.ActiveState == 'active'"
         fail_msg: "auditd not running on test-server"
 
     - name: Check target kernel audit=1
-      command: grep -o audit=1 /proc/cmdline
+      ansible.builtin.command: grep -o audit=1 /proc/cmdline
       register: t_audit_cmdline
       changed_when: false
       failed_when: false
 
     - name: Verify target audit=1
-      assert:
-        that: "t_audit_cmdline.stdout == 'audit=1'"
+      ansible.builtin.assert:
+        that: "t_audit_cmdline.stdout | trim == 'audit=1'"
         fail_msg: "audit=1 missing on test-server"
 
     - name: Check target journald audit socket masked
-      command: systemctl is-enabled systemd-journald-audit.socket
+      ansible.builtin.command: systemctl is-enabled systemd-journald-audit.socket
       register: t_jas_state
       changed_when: false
       failed_when: false
 
     - name: Verify target journald audit socket masked
-      assert:
+      ansible.builtin.assert:
         that: "t_jas_state.stdout | trim == 'masked'"
         fail_msg: "journald-audit.socket not masked on test-server"
 
     - name: Check target journal-upload running
-      systemd:
+      ansible.builtin.systemd:
         name: systemd-journal-upload.service
         state: started
       check_mode: true
       register: t_ju_svc
 
     - name: Verify target journal-upload
-      assert:
+      ansible.builtin.assert:
         that: "t_ju_svc.status.ActiveState == 'active'"
         fail_msg: "journal-upload not running on test-server"
 
     - name: Check target firewall (all zones, including rich rules)
-      command: firewall-cmd --list-all-zones
+      ansible.builtin.command: firewall-cmd --list-all-zones
       register: fw_target
       changed_when: false
 
     - name: Verify target firewall allows PostgreSQL 5432
-      assert:
+      ansible.builtin.assert:
         that: "'port=\"5432\"' in fw_target.stdout or '5432/tcp' in fw_target.stdout"
         fail_msg: "Target firewall missing 5432 (no rich rule and no port)"
 
     - name: Check target postgres crontab
-      command: crontab -u postgres -l
+      ansible.builtin.command: crontab -u postgres -l
       register: target_pg_crontab
       changed_when: false
       failed_when: false
 
     - name: Verify backup-postgres cron present
-      assert:
+      ansible.builtin.assert:
         that: "'backup-postgres' in target_pg_crontab.stdout"
         fail_msg: "backup-postgres cron missing for postgres user"
 
     - name: Check target root crontab
-      command: crontab -l
+      ansible.builtin.command: crontab -l
       register: target_root_crontab
       changed_when: false
       failed_when: false
 
     - name: Verify backup-configs cron present
-      assert:
+      ansible.builtin.assert:
         that: "'backup-configs' in target_root_crontab.stdout"
         fail_msg: "backup-configs cron missing for root"
 
     - name: PostgreSQL backup smoke
       block:
+        # Evaluate $(date +%s) on the remote host (single quotes inside the
+        # bash -c argument), so a retried play can't collide on a single
+        # controller-time timestamp.
         - name: Trigger pg_dumpall backup
-          shell: |
-            sudo -u postgres bash -c '/usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-test-{{ lookup("pipe", "date +%s") }}.sql.gz'
+          ansible.builtin.shell: |
+            sudo -u postgres bash -c '/usr/pgsql-16/bin/pg_dumpall | gzip > /mnt/backups/postgres/pg-test-$(date +%s).sql.gz'
           changed_when: false
 
         - name: Verify pg_dumpall backup is recoverable
-          shell: |
+          ansible.builtin.shell: |
             f=$(ls -t /mnt/backups/postgres/pg-test-*.sql.gz | head -1)
             test -s "$f" || exit 1
             gunzip -t "$f" || exit 1
-            gunzip -c "$f" | head -50
+            # Print enough of the dump to surface CREATE ROLE for dba1, which
+            # is the only meaningful proof that the dump captured real state.
+            gunzip -c "$f" | head -200
           register: pg_dump_head
           changed_when: false
 
-        - name: Assert pg backup contains SQL content
-          assert:
+        # `SET ` appears in every pg_dumpall output even on an empty cluster,
+        # so the original CREATE-ROLE-OR-SET assertion only proved pg_dumpall
+        # ran. Demand evidence of actual role state instead.
+        - name: Assert pg backup contains real role definitions
+          ansible.builtin.assert:
             that:
-              - "pg_dump_head.stdout is search('CREATE ROLE') or pg_dump_head.stdout is search('SET ')"
-            fail_msg: "pg backup doesn't contain expected SQL"
+              - "pg_dump_head.stdout is search('CREATE ROLE\\s+dba1')"
+            fail_msg: "pg backup missing expected dba1 role definition"
       always:
-        - name: Cleanup pg backup smoke artifact
-          shell: rm -f /mnt/backups/postgres/pg-test-*.sql.gz
+        # Only clean up on success — keep the artifact on the NFS share when
+        # the test fails so post-mortem can inspect the corrupt/short backup.
+        - name: Cleanup pg backup smoke artifact (success only)
+          ansible.builtin.shell: rm -f /mnt/backups/postgres/pg-test-*.sql.gz
           changed_when: false
+          when: ansible_failed_task is not defined
 
 # ── Cross-cutting: central log collector has every host ──
 - name: Verify central journal contains every fleet host
   hosts: storage
   tasks:
     - name: List hostnames in remote journal
-      shell: journalctl -D /var/log/journal/remote -F _HOSTNAME 2>/dev/null | sort -u
+      ansible.builtin.shell: journalctl -D /var/log/journal/remote -F _HOSTNAME 2>/dev/null | sort -u
       register: remote_hosts
       changed_when: false
 
     - name: Verify all clients have shipped journal entries
-      assert:
+      ansible.builtin.assert:
         that:
           - "'idp-node' in remote_hosts.stdout"
           - "'lb-node' in remote_hosts.stdout"
@@ -1178,7 +1242,7 @@
   hosts: idp:lb:bastions:target
   tasks:
     - name: Run trivial sudo command to fire USER_CMD audit event
-      command: /bin/true
+      ansible.builtin.command: /bin/true
       changed_when: false
 
 - name: Verify audit events landed on the central collector
@@ -1189,7 +1253,7 @@
         seconds: 6
 
     - name: List hostnames with audisp-syslog events in last 10 min
-      shell: |
+      ansible.builtin.shell: |
         journalctl -D /var/log/journal/remote --since "10 minutes ago" \
           SYSLOG_IDENTIFIER=audisp-syslog -o short-iso --no-pager 2>/dev/null \
           | awk '{print $2}' \
@@ -1198,7 +1262,7 @@
       changed_when: false
 
     - name: Verify audisp-syslog events from every non-storage host
-      assert:
+      ansible.builtin.assert:
         that:
           - "'idp-node' in audit_hosts_query.stdout"
           - "'lb-node' in audit_hosts_query.stdout"
@@ -1215,18 +1279,18 @@
   tasks:
     # Rootless user unit under secos@. See secos-idp note above.
     - name: Check secos-agents rootless user unit running
-      command: systemctl --user --machine=secos@.host is-active secos-agents.service
+      ansible.builtin.command: systemctl --user --machine=secos@.host is-active secos-agents.service
       register: agents_svc
       changed_when: false
       failed_when: false
 
     - name: Verify secos-agents active
-      assert:
+      ansible.builtin.assert:
         that: "agents_svc.stdout | trim == 'active'"
         fail_msg: "secos-agents not running on {{ inventory_hostname }}: {{ agents_svc.stdout }}"
 
     - name: Scrape node_exporter /metrics
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:9100/metrics
         return_content: true
         status_code: 200
@@ -1236,12 +1300,12 @@
       until: ne_metrics.status == 200
 
     - name: Verify node_exporter emits node_* metrics
-      assert:
+      ansible.builtin.assert:
         that: "'node_cpu_seconds_total' in ne_metrics.content"
         fail_msg: "node_exporter /metrics missing node_cpu_seconds_total"
 
     - name: Promtail /ready
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:9080/ready
         status_code: 200
       register: pt_ready
@@ -1250,14 +1314,14 @@
       until: pt_ready.status == 200
 
     - name: Promtail /metrics exposes send-batch counter
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:9080/metrics
         return_content: true
         status_code: 200
       register: pt_metrics
 
     - name: Verify promtail has shipped at least one batch to Loki
-      assert:
+      ansible.builtin.assert:
         that: "pt_metrics.content is search('promtail_sent_bytes_total')"
         fail_msg: "promtail has no promtail_sent_bytes_total metric on {{ inventory_hostname }}"
 
@@ -1267,23 +1331,23 @@
   tasks:
     # Rootless user unit under secos@. See secos-idp note above.
     - name: Check secos-monitoring rootless user unit running
-      command: systemctl --user --machine=secos@.host is-active secos-monitoring.service
+      ansible.builtin.command: systemctl --user --machine=secos@.host is-active secos-monitoring.service
       register: mon_svc
       changed_when: false
       failed_when: false
 
     - name: Verify secos-monitoring active
-      assert:
+      ansible.builtin.assert:
         that: "mon_svc.stdout | trim == 'active'"
         fail_msg: "secos-monitoring not running: {{ mon_svc.stdout }}"
 
     - name: Prometheus /-/healthy
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:9090/-/healthy
         status_code: 200
 
     - name: Prometheus /-/ready
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:9090/-/ready
         status_code: 200
       register: prom_ready
@@ -1292,25 +1356,25 @@
       until: prom_ready.status == 200
 
     - name: Query Prometheus active targets
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:9090/api/v1/targets?state=active
         return_content: true
       register: prom_targets
 
     - name: List down targets
-      set_fact:
+      ansible.builtin.set_fact:
         down_targets: >-
           {{ prom_targets.json.data.activeTargets
              | rejectattr('health','equalto','up')
              | map(attribute='scrapeUrl') | list }}
 
     - name: Verify all Prometheus scrape targets are up
-      assert:
+      ansible.builtin.assert:
         that: "down_targets | length == 0"
         fail_msg: "Prometheus targets down: {{ down_targets }}"
 
     - name: Verify Prometheus scrapes every fleet host (node_exporter)
-      assert:
+      ansible.builtin.assert:
         that: >-
           (prom_targets.json.data.activeTargets
              | selectattr('labels.job','equalto','node')
@@ -1319,7 +1383,7 @@
         fail_msg: "Prometheus 'node' job missing instances (got {{ prom_targets.json.data.activeTargets | selectattr('labels.job','equalto','node') | map(attribute='labels.instance') | list }})"
 
     - name: Loki /ready
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:3100/ready
         status_code: 200
       register: loki_ready
@@ -1328,18 +1392,18 @@
       until: loki_ready.status == 200
 
     - name: Loki /metrics responds
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:3100/metrics
         status_code: 200
 
     - name: Query Loki label values for 'host'
-      uri:
+      ansible.builtin.uri:
         url: "http://127.0.0.1:3100/loki/api/v1/label/host/values"
         return_content: true
       register: loki_hosts
 
     - name: Verify Loki has received logs from every host
-      assert:
+      ansible.builtin.assert:
         that:
           - "'storage-node' in (loki_hosts.json.data | default([]))"
           - "'idp-node' in (loki_hosts.json.data | default([]))"
@@ -1350,7 +1414,7 @@
         fail_msg: "Loki missing hosts. Got: {{ loki_hosts.json.data | default([]) }}"
 
     - name: Grafana /api/health
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:3000/api/health
         return_content: true
         status_code: 200
@@ -1360,18 +1424,20 @@
       until: graf_health.status == 200
 
     - name: Verify Grafana database healthy
-      assert:
+      ansible.builtin.assert:
         that: "graf_health.json.database == 'ok'"
         fail_msg: "Grafana database not ok: {{ graf_health.json }}"
 
     - name: Read Grafana admin password
-      slurp:
+      ansible.builtin.slurp:
         src: /var/lib/secos/secos/monitoring/grafana/admin_password
       register: graf_admin
       no_log: true
 
+    # No `failed_when: false` here — a 401 (wrong admin password) or a 5xx
+    # must fail the test, not be papered over by the `when:` gate below.
     - name: Grafana datasources are configured
-      uri:
+      ansible.builtin.uri:
         url: http://127.0.0.1:3000/api/datasources
         user: admin
         password: "{{ graf_admin.content | b64decode }}"
@@ -1379,13 +1445,11 @@
         return_content: true
         status_code: 200
       register: graf_ds
-      failed_when: false
       no_log: true
 
-    - name: Verify Prometheus + Loki datasources present (if API reachable)
-      assert:
+    - name: Verify Prometheus + Loki datasources present
+      ansible.builtin.assert:
         that:
           - "graf_ds.json | selectattr('type','equalto','prometheus') | list | length >= 1"
           - "graf_ds.json | selectattr('type','equalto','loki') | list | length >= 1"
         fail_msg: "Grafana missing datasource(s): {{ graf_ds.json | map(attribute='type') | list }}"
-      when: graf_ds.status is defined and graf_ds.status == 200
