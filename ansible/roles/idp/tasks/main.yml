@@ -220,13 +220,29 @@
 - name: Deploy LDAP backup script
   copy:
     dest: /opt/secos/bin/secos-backup-ldap
-    mode: "0755"
+    owner: root
+    group: root
+    mode: "0750"
     content: |
       #!/bin/bash
-      set -e
+      # Stages to .tmp and atomically renames on success — `set -o pipefail`
+      # alone leaves an empty 20-byte gz on disk when ldapsearch rejects the
+      # bind, silently overwriting the previous good backup.
+      set -euo pipefail
+      umask 077
       mkdir -p /mnt/backups/ldap
-      ldapsearch -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=bastion,dc=local" -w admin -b "dc=bastion,dc=local" \
-        | gzip > /mnt/backups/ldap/ldap-$(date +%F).ldif.gz
+      OUT=/mnt/backups/ldap/ldap-$(date +%F).ldif.gz
+      TMP=$OUT.tmp
+      # `-y file` would include any trailing newline as part of the password
+      # and OpenLDAP returns rc=49. Read explicitly and pass via -w.
+      PW=$(tr -d '\n' < /var/lib/secos/secos/idp/openldap/admin_password)
+      ldapsearch -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=bastion,dc=local" \
+        -w "$PW" -b "dc=bastion,dc=local" \
+        | gzip > "$TMP"
+      # Sanity-check: gunzip must contain at least one DN entry, otherwise
+      # we just wrote an empty gz from a partially failed pipe.
+      gunzip -c "$TMP" | grep -q '^dn:' || { rm -f "$TMP"; echo "ldap backup empty — refusing to publish" >&2; exit 1; }
+      mv "$TMP" "$OUT"
       find /mnt/backups/ldap/ -name "*.ldif.gz" -mtime +7 -delete
 
 - name: Deploy Keycloak backup script
