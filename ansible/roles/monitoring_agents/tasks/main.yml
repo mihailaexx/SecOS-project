@@ -7,19 +7,19 @@
 # host metrics do not.
 
 - name: Remove legacy rootful agents unit
-  systemd:
+  ansible.builtin.systemd:
     name: secos-agents
     state: stopped
     enabled: false
   failed_when: false
 
 - name: Remove legacy rootful agents unit file
-  file:
+  ansible.builtin.file:
     path: /etc/systemd/system/secos-agents.service
     state: absent
 
 - name: Remove legacy /etc/secos agents config tree
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
@@ -27,7 +27,7 @@
     - /opt/secos/agents
 
 - name: Create rootless agents config tree under secos $HOME
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: secos
@@ -38,7 +38,7 @@
     - /var/lib/secos/secos/agents/promtail
 
 - name: Deploy Promtail config
-  template:
+  ansible.builtin.template:
     src: promtail-config.yml.j2
     dest: /var/lib/secos/secos/agents/promtail/config.yml
     owner: secos
@@ -47,7 +47,7 @@
   notify: restart agents
 
 - name: Deploy compose file
-  copy:
+  ansible.builtin.copy:
     src: "{{ playbook_dir }}/../containers/agents/compose.yml"
     dest: /var/lib/secos/secos/agents/compose.yml
     owner: secos
@@ -56,7 +56,7 @@
   notify: restart agents
 
 - name: Deploy compose env file
-  template:
+  ansible.builtin.template:
     src: agents.env.j2
     dest: /var/lib/secos/secos/agents/.env
     owner: secos
@@ -65,7 +65,7 @@
   notify: restart agents
 
 - name: Install agents systemd user unit
-  template:
+  ansible.builtin.template:
     src: secos-agents.service.j2
     dest: /var/lib/secos/.config/systemd/user/secos-agents.service
     owner: secos
@@ -76,10 +76,9 @@
     - restart agents
 
 - name: Gather service facts (for firewalld detection)
-  service_facts:
-
+  ansible.builtin.service_facts:
 - name: Open node_exporter port on all active firewalld zones
-  shell: |
+  ansible.builtin.shell: |
     set -o pipefail
     zones=$(firewall-cmd --get-active-zones | awk 'NR%2==1')
     for z in $zones; do
@@ -94,7 +93,7 @@
   become_user: secos
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
-  systemd:
+  ansible.builtin.systemd:
     name: secos-agents
     enabled: true
     state: started
