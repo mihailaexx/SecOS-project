@@ -248,17 +248,37 @@
 - name: Deploy Keycloak backup script
   copy:
     dest: /opt/secos/bin/secos-backup-keycloak
-    mode: "0755"
+    owner: root
+    group: root
+    mode: "0750"
     content: |
       #!/bin/bash
-      set -e
+      # Live realm export via the admin REST API. `kc.sh export` cannot run
+      # while the server holds the H2 file lock; partial-export works against
+      # the running Keycloak. User entries are intentionally excluded — they
+      # are federated from LDAP and covered by secos-backup-ldap.
+      set -euo pipefail
+      umask 077
       mkdir -p /mnt/backups/keycloak
-      DATE=$(date +%F)
-      sudo -iu secos /usr/bin/podman exec keycloak /opt/keycloak/bin/kc.sh export --dir /tmp/kc-export --realm bastion
-      sudo -iu secos /usr/bin/podman cp keycloak:/tmp/kc-export /var/lib/secos/kc-export-$DATE
-      mv /var/lib/secos/kc-export-$DATE /mnt/backups/keycloak/$DATE
-      sudo -iu secos /usr/bin/podman exec keycloak rm -rf /tmp/kc-export
-      find /mnt/backups/keycloak/ -maxdepth 1 -mindepth 1 -type d -mtime +7 -exec rm -rf {} +
+      OUT=/mnt/backups/keycloak/keycloak-realm-bastion-$(date +%F).json.gz
+      TMP=$OUT.tmp
+      KC_URL=http://127.0.0.1:8080
+      ADMIN_PW=$(tr -d '\n' < /var/lib/secos/secos/idp/keycloak/admin_password)
+      TOKEN=$(curl -fsS -X POST "$KC_URL/realms/master/protocol/openid-connect/token" \
+        -d grant_type=password -d client_id=admin-cli \
+        -d username=admin --data-urlencode "password=$ADMIN_PW" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+      # partial-export is POST, not GET — `curl -fsS` defaults to GET and
+      # returns 404 on this endpoint.
+      curl -fsS -X POST -H "Authorization: Bearer $TOKEN" \
+        "$KC_URL/admin/realms/bastion/partial-export?exportClients=true&exportGroupsAndRoles=true" \
+        | gzip > "$TMP"
+      # Sanity-check: must contain the realm key, otherwise we just gzipped
+      # an empty body from a failed call.
+      gunzip -c "$TMP" | grep -q '"realm"[[:space:]]*:[[:space:]]*"bastion"' \
+        || { rm -f "$TMP"; echo "keycloak backup did not contain realm — refusing to publish" >&2; exit 1; }
+      mv "$TMP" "$OUT"
+      find /mnt/backups/keycloak/ -maxdepth 1 -name 'keycloak-realm-bastion-*.json.gz' -mtime +7 -delete
 
 - name: Deploy config backup script
   copy:
