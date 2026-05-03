@@ -1,6 +1,6 @@
 ---
 - name: Install packages
-  dnf:
+  ansible.builtin.dnf:
     name:
       - nfs-utils
       - mdadm
@@ -12,34 +12,43 @@
     state: present
 
 - name: Create RAID1 array from sdb + sdc
-  command: mdadm --create /dev/md0 --level=1 --raid-devices=2 --run /dev/vdb /dev/vdc
+  ansible.builtin.command: mdadm --create /dev/md0 --level=1 --raid-devices=2 --run /dev/vdb /dev/vdc
   args:
     creates: /dev/md0
 
 - name: Format RAID array with XFS
-  filesystem:
+  community.general.filesystem:
     fstype: xfs
     dev: /dev/md0
 
 - name: Mount RAID array at /export/home
-  mount:
+  ansible.posix.mount:
     path: /export/home
     src: /dev/md0
     fstype: xfs
     state: mounted
 
+# Stock Fedora ships an empty/comment-only /etc/mdadm.conf, so a plain
+# `creates: /etc/mdadm.conf` short-circuits before the scan ever runs.
+# Detect missing ARRAY entries instead and only rewrite when needed.
+- name: Check mdadm.conf for ARRAY entries
+  ansible.builtin.command: grep -q '^ARRAY' /etc/mdadm.conf
+  register: mdadm_conf_has_array
+  failed_when: false
+  changed_when: false
+
 - name: Save mdadm configuration
-  shell: mdadm --detail --scan > /etc/mdadm.conf
-  args:
-    creates: /etc/mdadm.conf
+  ansible.builtin.shell: mdadm --detail --scan > /etc/mdadm.conf
+  when: mdadm_conf_has_array.rc != 0
+  changed_when: true
 
 - name: Set /export/home permissions
-  file:
+  ansible.builtin.file:
     path: /export/home
     mode: "0755"
 
 - name: Create user home directories
-  file:
+  ansible.builtin.file:
     path: "/export/home/{{ item.name }}"
     state: directory
     owner: "{{ item.uid }}"
@@ -51,7 +60,7 @@
     - { name: dba1, uid: "1003", gid: "2002" }
 
 - name: Create backup directories
-  file:
+  ansible.builtin.file:
     path: "/export/backups/{{ item }}"
     state: directory
   loop:
@@ -65,7 +74,7 @@
 # user (uid 26). NFS uses numeric uids, so the dir must be writable by
 # uid 26 — postgres user does not exist on storage-node.
 - name: Ensure postgres backup dir is writable by uid 26 (postgres on test-server)
-  file:
+  ansible.builtin.file:
     path: /export/backups/postgres
     state: directory
     owner: "26"
@@ -88,24 +97,27 @@
   register: storage_fcontext
 
 - name: Apply file contexts to existing files
-  command: restorecon -RFv /export/home /export/backups
+  ansible.builtin.command: restorecon -RFv /export/home /export/backups
   when: storage_fcontext.changed
   changed_when: true
 
 - name: Configure NFS exports
-  template:
+  ansible.builtin.template:
     src: exports.j2
     dest: /etc/exports
+    owner: root
+    group: root
+    mode: "0644"
   notify: reload nfs
 
 - name: Enable and start NFS server
-  systemd:
+  ansible.builtin.systemd:
     name: nfs-server
     enabled: true
     state: started
 
 - name: Weekly home backup cron
-  cron:
+  ansible.builtin.cron:
     name: backup-homes
     minute: "0"
     hour: "2"
@@ -116,24 +128,24 @@
       && find /export/backups/homes/ -name "*.tar.gz" -mtime +7 -delete
 
 - name: Enable crond
-  systemd:
+  ansible.builtin.systemd:
     name: crond
     enabled: true
     state: started
 
 - name: Install firewalld
-  dnf:
+  ansible.builtin.dnf:
     name: firewalld
     state: present
 
 - name: Deploy firewalld zone
-  template:
+  ansible.builtin.template:
     src: firewalld-internal-bastion.xml.j2
     dest: /etc/firewalld/zones/internal-bastion.xml
   notify: reload firewalld
 
 - name: Enable and start firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     enabled: true
     state: started

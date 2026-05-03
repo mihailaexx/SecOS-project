@@ -1,2 +1,10 @@
-/export/home 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash,security_label)
-/export/backups 192.168.56.0/24(rw,sync,no_subtree_check,no_root_squash,security_label)
+# /export/home: user-owned files, accessed by uid/gid mapping. Squash root
+# so a compromised bastion root cannot rewrite arbitrary user files.
+/export/home    {{ secos_lab_cidr }}(rw,sync,no_subtree_check,root_squash,security_label)
+
+# /export/backups: backup cron jobs on idp/bastion/lb/target run AS ROOT
+# (rsync -a /etc/, LDAP dump, Keycloak realm export). They write into
+# directories that mirror /etc/ permissions, so client-side root must be
+# preserved. Network is restricted to {{ secos_lab_cidr }} by firewalld
+# zone, and SELinux labels carry across via security_label.
+/export/backups {{ secos_lab_cidr }}(rw,sync,no_subtree_check,no_root_squash,security_label)
