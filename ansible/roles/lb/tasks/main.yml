@@ -1,55 +1,59 @@
 ---
 - name: Install HAProxy
-  dnf:
+  ansible.builtin.dnf:
     name: haproxy
     state: present
 
 - name: Deploy HAProxy configuration
-  template:
+  ansible.builtin.template:
     src: haproxy.cfg.j2
     dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: haproxy
+    mode: "0640"
+    validate: "haproxy -c -f %s"
   notify: restart haproxy
 
 - name: Install Python SELinux bindings
-  dnf:
+  ansible.builtin.dnf:
     name:
       - python3-libselinux
       - python3-libsemanage
     state: present
 
 - name: Allow HAProxy to connect to any port (SELinux)
-  seboolean:
+  ansible.posix.seboolean:
     name: haproxy_connect_any
     state: true
     persistent: true
 
 - name: Enable and start HAProxy
-  systemd:
+  ansible.builtin.systemd:
     name: haproxy
     enabled: true
     state: started
 
 # ── Firewall ──
 - name: Install firewalld
-  dnf:
+  ansible.builtin.dnf:
     name: firewalld
     state: present
 
 - name: Deploy firewalld public zone
-  template:
+  ansible.builtin.template:
     src: firewalld-public.xml.j2
     dest: /etc/firewalld/zones/public.xml
   notify: reload firewalld
 
 - name: Enable and start firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     enabled: true
     state: started
 
 # ── Backups ──
 - name: Install NFS utils and cronie
-  dnf:
+  ansible.builtin.dnf:
     name:
       - nfs-utils
       - cronie
@@ -64,7 +68,7 @@
     state: mounted
 
 - name: Daily config backup cron
-  cron:
+  ansible.builtin.cron:
     name: backup-configs
     minute: "0"
     hour: "3"
@@ -74,7 +78,7 @@
       && rsync -a /etc/ /mnt/backups/configs/lb-node/
 
 - name: Enable crond
-  systemd:
+  ansible.builtin.systemd:
     name: crond
     enabled: true
     state: started

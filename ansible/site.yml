@@ -9,27 +9,31 @@
 - name: Bootstrap lb-node SSH management port
   hosts: lb
   gather_facts: false
+  tags: [bootstrap, lb-bootstrap]
   tasks:
+    # Probe management port. failed_when:false (not ignore_errors) so
+    # genuine inventory errors (DNS, unreachable) still surface — only
+    # a closed-port result routes us into the first-run branch.
     - name: Check if management port 2222 is already open
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 2222
         timeout: 3
       delegate_to: localhost
       become: false
       register: mgmt_port_check
-      ignore_errors: true
+      failed_when: false
 
     - name: Configure sshd management port (first run only)
-      when: mgmt_port_check is failed
+      when: mgmt_port_check.failed | default(false) or mgmt_port_check.elapsed | default(0) | int >= 3
       vars:
         ansible_port: 22
       block:
         - name: Gather facts
-          setup:
+          ansible.builtin.setup:
 
         - name: Get NAT interface IP (default-route interface)
-          shell: |
+          ansible.builtin.shell: |
             set -o pipefail
             iface=$(ip -4 route show default | awk '{print $5; exit}')
             ip -4 -o addr show "$iface" | awk '{print $4}' | cut -d/ -f1
@@ -37,22 +41,23 @@
           changed_when: false
 
         - name: Remove existing ListenAddress lines
-          lineinfile:
+          ansible.builtin.lineinfile:
             path: /etc/ssh/sshd_config
             regexp: '^#?ListenAddress'
             state: absent
 
         - name: Bind sshd to NAT:22 + management:2222
-          blockinfile:
+          ansible.builtin.blockinfile:
             path: /etc/ssh/sshd_config
             marker: "# {mark} MANAGED BY ANSIBLE - SSHD LISTEN"
             block: |
               ListenAddress {{ eth0_ip.stdout }}:22
               ListenAddress 127.0.0.1:22
               ListenAddress 0.0.0.0:2222
+            validate: "/usr/sbin/sshd -t -f %s"
 
         - name: Install SELinux management tools
-          dnf:
+          ansible.builtin.dnf:
             name:
               - python3-libselinux
               - python3-libsemanage
@@ -60,36 +65,50 @@
             state: present
 
         - name: Allow sshd to bind to port 2222 (SELinux)
-          command: semanage port -a -t ssh_port_t -p tcp 2222
+          ansible.builtin.command: semanage port -a -t ssh_port_t -p tcp 2222
           register: semanage_result
           failed_when: semanage_result.rc != 0 and 'already defined' not in semanage_result.stderr
           changed_when: semanage_result.rc == 0
 
         - name: Validate sshd config before restart
-          command: sshd -t
+          ansible.builtin.command: sshd -t
           changed_when: false
 
         - name: Restart sshd to activate management port (async — port 22 will drop)
-          shell: sleep 2 && systemctl restart sshd
+          ansible.builtin.shell: sleep 2 && systemctl restart sshd
           async: 10
           poll: 0
 
+    # Bumped from 30s → 120s. SELinux port label cache and systemd's restart
+    # backoff can take longer than 30s, especially on a slow VM, and a
+    # premature failure here leaves sshd in an unknown state.
     - name: Wait for management port 2222
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 2222
-        timeout: 30
+        timeout: 120
       delegate_to: localhost
       become: false
+
+    # Verify sshd is actually serving 2222 (not just that something opened
+    # the socket). Uses a fresh connection on 2222 to confirm the bootstrap
+    # really took effect before subsequent plays depend on it.
+    - name: Verify sshd is listening on 2222
+      ansible.builtin.shell: ss -H -tlnp '( sport = :2222 )' | grep -q sshd
+      vars:
+        ansible_port: 2222
+      changed_when: false
 
 # Pin SELinux to enforcing on every guest before any role runs. Fedora's
 # default is enforcing, but a relabeled-permissive image would silently slip
 # past the rest of the playbook — fail fast here instead.
 - name: Pin SELinux mode to enforcing
   hosts: all:!hypervisor
+  gather_facts: false
+  tags: [selinux, baseline]
   tasks:
     - name: Install SELinux management tools
-      dnf:
+      ansible.builtin.dnf:
         name:
           - python3-libselinux
           - python3-libsemanage
@@ -100,6 +119,16 @@
       ansible.posix.selinux:
         policy: targeted
         state: enforcing
+
+    # Catch hosts where the kernel cmdline overrides /etc/selinux/config —
+    # `selinux=0` or `enforcing=0` would silently leave the host permissive
+    # on next boot even after `setenforce 1`.
+    - name: Reject permissive kernel cmdline overrides
+      ansible.builtin.command: cat /proc/cmdline
+      register: kernel_cmdline
+      changed_when: false
+      failed_when:
+        - "'selinux=0' in kernel_cmdline.stdout or 'enforcing=0' in kernel_cmdline.stdout"
 
     # Provisioning account must run unconfined so roles can `semanage`,
     # restorecon, install packages, etc. Explicit row beats __default__
@@ -112,26 +141,33 @@
 
     # Drop the legacy vagrant selogin row (and the user itself) on hosts
     # that were originally provisioned with the old surrogate account.
-    # Idempotent: no-ops once vagrant is gone.
+    # Idempotent: no-ops once vagrant is gone. Scope failed_when to the
+    # known "user does not exist" case so a busy-process userdel still fails.
     - name: Remove legacy vagrant selogin row
       community.general.selogin:
         login: vagrant
         state: absent
-      failed_when: false
+      register: vagrant_selogin_remove
+      failed_when:
+        - vagrant_selogin_remove.failed | default(false)
+        - "'No such login' not in (vagrant_selogin_remove.msg | default(''))"
 
     - name: Remove legacy vagrant user
-      user:
+      ansible.builtin.user:
         name: vagrant
         state: absent
         remove: true
         force: true
-      failed_when: false
+      register: vagrant_user_remove
+      failed_when:
+        - vagrant_user_remove.failed | default(false)
+        - "'does not exist' not in (vagrant_user_remove.msg | default(''))"
 
     # Extend staff_u with sysadm_r everywhere so any host that later maps a
     # human account to staff_u (admin1 on bastions, dba1 on test-server) can
     # `sudo -i` into a sysadm_t shell. Idempotent; tolerates "already" stderr.
     - name: Extend staff_u with sysadm_r role
-      command: semanage user -m -R 'staff_r sysadm_r' staff_u
+      ansible.builtin.command: semanage user -m -R 'staff_r sysadm_r' staff_u
       register: seuser_staff
       changed_when: seuser_staff.rc == 0
       failed_when:
@@ -140,38 +176,44 @@
       check_mode: false
 
     - name: Assert SELinux is currently enforcing
-      command: getenforce
+      ansible.builtin.command: getenforce
       register: getenforce_out
       changed_when: false
       failed_when: getenforce_out.stdout.strip() != 'Enforcing'
 
 - name: Install container runtime on all hosts
   hosts: all:!hypervisor
+  tags: [container_runtime]
   roles:
     - container_runtime
 
 - name: Configure storage-node (NFS + RAID1)
   hosts: storage
+  tags: [storage]
   roles:
     - storage
 
 - name: Configure idp-node (Keycloak + OpenLDAP containers)
   hosts: idp
+  tags: [idp]
   roles:
     - idp
 
 - name: Configure lb-node (HAProxy)
   hosts: lb
+  tags: [lb]
   roles:
     - lb
 
 - name: Configure bastion nodes (SSH + OIDC)
   hosts: bastions
+  tags: [bastion]
   roles:
     - bastion
 
 - name: Configure test-server (PostgreSQL)
   hosts: target
+  tags: [target]
   roles:
     - target
 
@@ -181,16 +223,32 @@
 
 - name: Configure auditd on all hosts
   hosts: all:!hypervisor
+  tags: [audit, observability]
   roles:
     - audit
 
 - name: Configure central log sink (storage-node)
   hosts: storage
+  tags: [logging_server, observability]
   roles:
     - logging_server
+  post_tasks:
+    # Make sure journal-remote is fully up before clients try to connect.
+    # logging_client below relies on the storage-side socket being open.
+    - name: Flush handlers so journal-remote is running
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for journal-remote socket
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 19532
+        timeout: 60
+      delegate_to: localhost
+      become: false
 
 - name: Configure journal shippers on all non-storage hosts
   hosts: idp:lb:bastions:target
+  tags: [logging_client, observability]
   roles:
     - logging_client
 
@@ -200,11 +258,13 @@
 
 - name: Deploy central monitoring stack on storage-node
   hosts: storage
+  tags: [monitoring_stack, observability]
   roles:
     - monitoring_stack
 
 - name: Deploy monitoring agents on all hosts
   hosts: all:!hypervisor
+  tags: [monitoring_agents, observability]
   roles:
     - monitoring_agents
 
@@ -218,5 +278,6 @@
 - name: Configure hypervisor-side TCP forwarders
   hosts: hypervisor
   become: true
+  tags: [hypervisor, grafana_forward, never]
   roles:
     - grafana_forward

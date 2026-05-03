@@ -1,6 +1,6 @@
 ---
 - name: Install packages
-  dnf:
+  ansible.builtin.dnf:
     name:
       - nfs-utils
       - sssd
@@ -17,22 +17,26 @@
 
 # ── SSHD config (deploy FIRST to keep ansible auth alive through authselect) ──
 - name: Deploy sshd bastion auth drop-in
-  template:
+  ansible.builtin.template:
     src: 40-bastion-auth.conf.j2
     dest: /etc/ssh/sshd_config.d/40-bastion-auth.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "/usr/sbin/sshd -t -f %s"
   register: sshd_dropin
 
 - name: Fix SELinux context on sshd drop-in
-  command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
+  ansible.builtin.command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
   changed_when: false
 
 - name: Validate sshd config
-  command: sshd -t
+  ansible.builtin.command: sshd -t
   changed_when: false
   when: sshd_dropin.changed
 
 - name: Restart sshd to activate ansible auth early
-  systemd:
+  ansible.builtin.systemd:
     name: sshd
     state: restarted
   when: sshd_dropin.changed
@@ -47,7 +51,7 @@
 # AVC denials against the autofs filesystem (systemd_homed_t → autofs_t).
 # Mask rather than just disable so it can't be reactivated by a unit alias.
 - name: Mask systemd-homed (replaced by autofs+NFS for human homes)
-  systemd:
+  ansible.builtin.systemd:
     name: systemd-homed
     enabled: false
     masked: true
@@ -55,73 +59,85 @@
 
 # ── AutoFS for NFS home directories ──
 - name: Deploy autofs master config
-  copy:
+  ansible.builtin.copy:
     src: home.autofs
     dest: /etc/auto.master.d/home.autofs
   notify: restart autofs
 
 - name: Deploy autofs home map
-  copy:
-    src: auto.home
+  ansible.builtin.template:
+    src: auto.home.j2
     dest: /etc/auto.home
+    owner: root
+    group: root
+    mode: "0644"
   notify: restart autofs
 
 - name: Enable and start autofs
-  systemd:
+  ansible.builtin.systemd:
     name: autofs
     enabled: true
     state: started
 
 # ── SSSD (LDAP user/group resolution) ──
 - name: Deploy SSSD configuration
-  template:
+  ansible.builtin.template:
     src: sssd.conf.j2
     dest: /etc/sssd/sssd.conf
     mode: "0600"
   notify: restart sssd
 
 - name: Enable and start SSSD
-  systemd:
+  ansible.builtin.systemd:
     name: sssd
     enabled: true
     state: started
 
 - name: Configure authselect with SSSD and mkhomedir
-  command: authselect select sssd with-mkhomedir --force
+  ansible.builtin.command: authselect select sssd with-mkhomedir --force
   changed_when: false
 
-# Deploy PAM sshd config immediately after authselect (before connection drops)
+# Deploy PAM sshd config immediately after authselect (before connection drops).
+# /etc/pam.d/sshd has no native validator; mode/owner are pinned and the
+# sshd handler will fail loudly via `sshd -t` before restart.
 - name: Deploy PAM sshd config
-  template:
+  ansible.builtin.template:
     src: sshd-pam.j2
     dest: /etc/pam.d/sshd
+    owner: root
+    group: root
+    mode: "0644"
   notify: restart sshd
 
 - name: Reset SSH connection after PAM changes
   meta: reset_connection
 
 - name: Enable and start oddjobd
-  systemd:
+  ansible.builtin.systemd:
     name: oddjobd
     enabled: true
     state: started
 
 # ── pam-keycloak-oidc ──
 - name: Create pam-keycloak-oidc directory
-  file:
+  ansible.builtin.file:
     path: /opt/pam-keycloak-oidc
     state: directory
 
 - name: Deploy pam-keycloak-oidc binary (pre-staged on controller)
-  copy:
+  ansible.builtin.copy:
     src: "{{ playbook_dir }}/files/cache/pam-keycloak-oidc.linux-amd64"
     dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc
     mode: "0755"
 
 - name: Deploy pam-keycloak-oidc config
-  template:
+  ansible.builtin.template:
     src: pam-keycloak-oidc.tml.j2
     dest: /opt/pam-keycloak-oidc/pam-keycloak-oidc.tml
+    owner: root
+    group: root
+    mode: "0640"
+  no_log: true
 
 # ── SELinux policy for pam-keycloak-oidc ──
 # Custom restricted policy:
@@ -129,13 +145,13 @@
 #   * three file types: _exec_t, _conf_t, _log_t
 #   * custom port type pam_keycloak_oidc_port_t (no piggybacking on http_cache_port_t)
 - name: Create SELinux build directory for pam-keycloak-oidc
-  file:
+  ansible.builtin.file:
     path: /var/lib/selinux-build/pam_keycloak_oidc
     state: directory
     mode: "0755"
 
 - name: Stage SELinux policy sources (.te + .fc)
-  copy:
+  ansible.builtin.copy:
     src: "{{ item }}"
     dest: "/var/lib/selinux-build/pam_keycloak_oidc/{{ item }}"
   loop:
@@ -144,14 +160,14 @@
   register: selinux_src
 
 - name: Build SELinux policy module via refpolicy devel Makefile
-  command: make -f /usr/share/selinux/devel/Makefile pam_keycloak_oidc.pp
+  ansible.builtin.command: make -f /usr/share/selinux/devel/Makefile pam_keycloak_oidc.pp
   args:
     chdir: /var/lib/selinux-build/pam_keycloak_oidc
   when: selinux_src.changed
   changed_when: true
 
 - name: Install SELinux policy module
-  command: semodule -i /var/lib/selinux-build/pam_keycloak_oidc/pam_keycloak_oidc.pp
+  ansible.builtin.command: semodule -i /var/lib/selinux-build/pam_keycloak_oidc/pam_keycloak_oidc.pp
   when: selinux_src.changed
   changed_when: true
 
@@ -165,7 +181,7 @@
 
 # Ensure log file exists so the file-context rule can label it
 - name: Pre-create pam-keycloak-oidc log file
-  file:
+  ansible.builtin.file:
     path: /var/log/pam-keycloak-oidc.log
     state: touch
     owner: root
@@ -174,12 +190,12 @@
   changed_when: false
 
 - name: Apply file contexts for pam-keycloak-oidc paths
-  command: restorecon -RFv /opt/pam-keycloak-oidc /var/log/pam-keycloak-oidc.log
+  ansible.builtin.command: restorecon -RFv /opt/pam-keycloak-oidc /var/log/pam-keycloak-oidc.log
   changed_when: false
 
 # ── Groups ──
 - name: Create groups
-  group:
+  ansible.builtin.group:
     name: "{{ item.name }}"
     gid: "{{ item.gid }}"
   loop:
@@ -189,7 +205,7 @@
 
 # ── Users (no home dirs — they live on NFS via autofs) ──
 - name: Create user m.bulushev
-  user:
+  ansible.builtin.user:
     name: m.bulushev
     uid: 1001
     group: bastion-users
@@ -198,7 +214,7 @@
     create_home: false
 
 - name: Create user admin1
-  user:
+  ansible.builtin.user:
     name: admin1
     uid: 1002
     group: bastion-admins
@@ -207,7 +223,7 @@
     create_home: false
 
 - name: Create user dba1
-  user:
+  ansible.builtin.user:
     name: dba1
     uid: 1003
     group: dba
@@ -230,7 +246,7 @@
 
 # ── Sudoers ──
 - name: Deploy bastion-admins sudoers
-  copy:
+  ansible.builtin.copy:
     content: |
       %bastion-admins ALL=(root) /usr/bin/systemctl restart sssd
       %bastion-admins ALL=(root) /usr/bin/systemctl restart haproxy
@@ -248,18 +264,18 @@
 
 # ── Firewall ──
 - name: Install firewalld
-  dnf:
+  ansible.builtin.dnf:
     name: firewalld
     state: present
 
 - name: Deploy firewalld public zone
-  template:
+  ansible.builtin.template:
     src: firewalld-public.xml.j2
     dest: /etc/firewalld/zones/public.xml
   notify: reload firewalld
 
 - name: Enable and start firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     enabled: true
     state: started
@@ -274,7 +290,7 @@
     state: mounted
 
 - name: Daily config backup cron
-  cron:
+  ansible.builtin.cron:
     name: backup-configs
     minute: "0"
     hour: "3"
@@ -284,7 +300,7 @@
       && rsync -a /etc/ /mnt/backups/configs/{{ inventory_hostname }}/
 
 - name: Enable crond
-  systemd:
+  ansible.builtin.systemd:
     name: crond
     enabled: true
     state: started
