@@ -14,10 +14,11 @@ defaults
     timeout server 30s
 
 frontend ssh_front
-    bind 192.168.56.10:22
+    bind {{ secos_lb_ip }}:22
     default_backend ssh_bastions
 
 backend ssh_bastions
     balance roundrobin
-    server bastion-01 192.168.56.11:22 check
-    server bastion-02 192.168.56.12:22 check
+{% for host in groups['bastions'] %}
+    server {{ host }} {{ hostvars[host].ansible_host }}:22 check
+{% endfor %}

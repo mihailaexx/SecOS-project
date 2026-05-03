@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <zone>
   <short>Internal Bastion</short>
-  <source address="192.168.56.0/24"/>
+  <source address="{{ secos_lab_cidr }}"/>
   <service name="ssh"/>
+  <!-- 8080 is also exposed in public zone with bastion-only rich rules,
+       but the internal-bastion zone is the canonical lab-side entry. -->
   <port port="8080" protocol="tcp"/>
   <port port="389" protocol="tcp"/>
 </zone>

@@ -266,11 +266,11 @@
 
 # ── Backups ──
 - name: Mount NFS backup share
-  mount:
+  ansible.posix.mount:
     path: /mnt/backups
-    src: "192.168.56.50:/export/backups"
-    fstype: nfs4
-    opts: _netdev,defaults
+    src: "{{ secos_storage_ip }}:/export/backups"
+    fstype: nfs
+    opts: "{{ secos_nfs_mount_opts }}"
     state: mounted
 
 - name: Daily config backup cron

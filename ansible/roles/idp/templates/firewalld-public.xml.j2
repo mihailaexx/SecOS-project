@@ -2,5 +2,15 @@
 <zone>
   <short>Public</short>
   <service name="ssh"/>
-  <port port="8080" protocol="tcp"/>
+  <!-- Keycloak HTTP. Restricted to bastions; the legacy unrestricted
+       0.0.0.0:8080 port has been removed. Plaintext HTTP is acceptable
+       only because the consumer (pam-keycloak-oidc) lives on the same
+       lab CIDR and OIDC tokens are signed (not encrypted) anyway. -->
+{% for host in groups['bastions'] %}
+  <rule family="ipv4">
+    <source address="{{ hostvars[host].ansible_host }}/32"/>
+    <port port="8080" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
 </zone>

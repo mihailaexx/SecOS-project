@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <zone>
   <short>Internal Bastion</short>
-  <source address="192.168.56.0/24"/>
+  <source address="{{ secos_lab_cidr }}"/>
   <service name="ssh"/>
   <service name="nfs"/>
   <service name="rpc-bind"/>
   <service name="mountd"/>
   <port port="19532" protocol="tcp"/>
-  <!-- Monitoring stack -->
+  <!-- Monitoring stack (storage-node hosts Prometheus/Loki/Grafana) -->
   <port port="3000" protocol="tcp"/>
   <port port="3100" protocol="tcp"/>
   <port port="9090" protocol="tcp"/>

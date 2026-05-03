@@ -2,28 +2,20 @@
 <zone>
   <short>Public</short>
   <rule family="ipv4">
-    <source address="192.168.56.1/32"/>
+    <source address="{{ secos_hypervisor_ip }}/32"/>
+    <port port="22" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% for host in groups['bastions'] %}
+  <rule family="ipv4">
+    <source address="{{ hostvars[host].ansible_host }}/32"/>
     <port port="22" protocol="tcp"/>
     <accept/>
   </rule>
   <rule family="ipv4">
-    <source address="192.168.56.11/32"/>
-    <port port="22" protocol="tcp"/>
-    <accept/>
-  </rule>
-  <rule family="ipv4">
-    <source address="192.168.56.12/32"/>
-    <port port="22" protocol="tcp"/>
-    <accept/>
-  </rule>
-  <rule family="ipv4">
-    <source address="192.168.56.11/32"/>
+    <source address="{{ hostvars[host].ansible_host }}/32"/>
     <port port="5432" protocol="tcp"/>
     <accept/>
   </rule>
-  <rule family="ipv4">
-    <source address="192.168.56.12/32"/>
-    <port port="5432" protocol="tcp"/>
-    <accept/>
-  </rule>
+{% endfor %}
 </zone>
