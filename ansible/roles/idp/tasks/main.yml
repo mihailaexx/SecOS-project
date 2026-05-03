@@ -1,28 +1,28 @@
 ---
 # ── Remove legacy native install (if upgrading from pre-containerized deployment) ──
 - name: Stop + disable legacy slapd
-  systemd:
+  ansible.builtin.systemd:
     name: slapd
     state: stopped
     enabled: false
   failed_when: false
 
 - name: Stop + disable legacy keycloak
-  systemd:
+  ansible.builtin.systemd:
     name: keycloak
     state: stopped
     enabled: false
   failed_when: false
 
 - name: Remove legacy openldap-servers package
-  dnf:
+  ansible.builtin.dnf:
     name:
       - openldap-servers
     state: absent
   failed_when: false
 
 - name: Remove legacy keycloak install dir + unit file
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
@@ -31,19 +31,19 @@
 
 # ── Remove legacy rootful IdP install ──
 - name: Stop + disable legacy rootful secos-idp unit
-  systemd:
+  ansible.builtin.systemd:
     name: secos-idp
     state: stopped
     enabled: false
   failed_when: false
 
 - name: Remove legacy rootful unit file
-  file:
+  ansible.builtin.file:
     path: /etc/systemd/system/secos-idp.service
     state: absent
 
 - name: Remove legacy /etc/secos IdP config tree
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
@@ -53,7 +53,7 @@
 
 # ── Rootless config tree under secos $HOME ──
 - name: Create secos IdP config tree
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: secos
@@ -67,7 +67,7 @@
     - /var/lib/secos/secos/idp/keycloak/import
 
 - name: Create root-owned operator paths
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: root
@@ -79,7 +79,7 @@
 
 # ── OpenLDAP container config ──
 - name: Deploy OpenLDAP LDIF (container-compatible)
-  copy:
+  ansible.builtin.copy:
     src: ldap-container.ldif
     dest: /var/lib/secos/secos/idp/openldap/ldifs/01-users.ldif
     owner: secos
@@ -87,61 +87,172 @@
     mode: "0644"
   notify: restart idp
 
-- name: Generate OpenLDAP admin password
-  copy:
-    content: "admin\n"
+- name: Ensure controller-side password cache dir exists
+  ansible.builtin.file:
+    path: "{{ secos_password_cache_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# Resolve both admin passwords ONCE into facts so the on-disk admin_password
+# files (consumed by backup scripts) and the compose `.env` (consumed by the
+# containers themselves) hold byte-identical values. Vault wins; lookup
+# generates a stable random fallback per-controller.
+- name: Resolve OpenLDAP admin password
+  ansible.builtin.set_fact:
+    secos_openldap_admin_password: "{{ vault_openldap_admin_password | default(lookup('password', secos_password_cache_dir ~ '/openldap-admin-password length=24 chars=ascii_letters,digits')) }}"
+  no_log: true
+
+- name: Resolve Keycloak admin password
+  ansible.builtin.set_fact:
+    secos_keycloak_admin_password: "{{ lookup('password', secos_password_cache_dir ~ '/keycloak-admin-password length=24 chars=ascii_letters,digits') }}"
+  no_log: true
+
+- name: Write OpenLDAP admin password file (for backup scripts)
+  ansible.builtin.copy:
+    # NO trailing newline. ldapsearch -y reads the entire file as the password
+    # and OpenLDAP rejects "<pw>\n" with rc=49. Backup scripts also read this
+    # via `tr -d '\n'` for defense in depth.
+    content: "{{ secos_openldap_admin_password }}"
     dest: /var/lib/secos/secos/idp/openldap/admin_password
     owner: secos
     group: secos
     mode: "0400"
   no_log: true
+  register: ldap_pw_file
 
 # ── Keycloak container config ──
 - name: Deploy Keycloak realm import
-  template:
+  ansible.builtin.template:
     src: bastion-realm.json.j2
     dest: /var/lib/secos/secos/idp/keycloak/import/bastion-realm.json
     owner: secos
     group: secos
-    mode: "0644"
+    mode: "0640"
   notify: restart idp
+  no_log: true
 
-- name: Generate Keycloak admin password
-  copy:
-    content: "{{ lookup('password', '/tmp/secos-keycloak-admin-password length=24 chars=ascii_letters,digits') }}"
+- name: Write Keycloak admin password file
+  ansible.builtin.copy:
+    content: "{{ secos_keycloak_admin_password }}"
     dest: /var/lib/secos/secos/idp/keycloak/admin_password
     owner: secos
     group: secos
     mode: "0400"
   no_log: true
+  register: kc_pw_file
 
 # ── Compose + systemd user unit ──
-- name: Deploy IdP compose file
-  copy:
-    src: "{{ playbook_dir }}/../containers/idp/compose.yml"
+# Render the compose with passwords substituted at deploy time. podman-compose
+# never has to do `${VAR}` env substitution (which has been inconsistent
+# across versions and was the root cause of an "Invalid credentials" loop
+# during initial migration from the old hardcoded `admin` literal).
+# 0640 secos-only: contains the live admin passwords.
+- name: Deploy IdP compose file (with rendered passwords)
+  ansible.builtin.template:
+    src: compose.yml.j2
     dest: /var/lib/secos/secos/idp/compose.yml
     owner: secos
     group: secos
-    mode: "0644"
+    mode: "0640"
   notify: restart idp
+  no_log: true
+  register: idp_compose_file
 
+# Earlier iterations of this role wrote a `.env` to be loaded via systemd
+# EnvironmentFile=; we now render the compose with values inline. Remove
+# the stale file so the rootless host doesn't keep a redundant secret on disk.
+- name: Remove legacy IdP .env file
+  ansible.builtin.file:
+    path: /var/lib/secos/secos/idp/.env
+    state: absent
+
+# Install/refresh the systemd unit BEFORE the volume-reset block so the
+# stop uses the current unit definition (and `daemon-reload` happens
+# before any restart).
 - name: Install IdP systemd user unit
-  copy:
+  ansible.builtin.copy:
     src: secos-idp.service
     dest: /var/lib/secos/.config/systemd/user/secos-idp.service
     owner: secos
     group: secos
     mode: "0644"
+  register: idp_unit_file
   notify:
     - daemon reload idp
     - restart idp
+
+# Pick up new unit content before stopping the stack — otherwise
+# systemd's `stop` runs with the old unit definition.
+- name: Reload secos user systemd before volume reset
+  when: idp_unit_file.changed or idp_compose_file.changed
+  become: true
+  become_user: secos
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+
+# Bitnami OpenLDAP and Keycloak's dev-file backend ONLY honor
+# LDAP_ADMIN_PASSWORD / KC_BOOTSTRAP_ADMIN_PASSWORD on first init of an
+# empty volume. If we ever rotate the password OR migrate from the legacy
+# hardcoded `admin` literal, the container keeps the old credential in
+# its persistent volume and bind fails. Reset the volumes whenever the
+# admin password file or the .env changes — LDIF data is bootstrapped
+# from /ldifs and the Keycloak realm is reimported from /import, so no
+# meaningful state is lost.
+#
+# Override with `-e secos_idp_force_recreate=true` to force a wipe
+# (useful when migrating from the legacy compose with literal passwords).
+- name: Reset IdP container volumes when admin password changes
+  when: >-
+    secos_idp_force_recreate | default(false) | bool
+    or ldap_pw_file.changed
+    or kc_pw_file.changed
+    or idp_compose_file.changed
+  become: true
+  become_user: secos
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
+  block:
+    - name: Stop IdP stack so volumes can be wiped
+      ansible.builtin.systemd:
+        name: secos-idp
+        state: stopped
+        scope: user
+      register: idp_stop
+      failed_when:
+        - idp_stop.failed | default(false)
+        - "'not loaded' not in (idp_stop.msg | default(''))"
+
+    # `podman volume rm -f` returns rc 0 when the volume is gone OR was
+    # missing. Surface anything else (e.g. "in use" if the unit somehow
+    # didn't stop) instead of silently swallowing it.
+    - name: Remove openldap-data volume
+      ansible.builtin.command: podman volume rm -f openldap-data
+      register: rm_ldap_vol
+      changed_when: rm_ldap_vol.rc == 0 and rm_ldap_vol.stdout != ''
+      failed_when:
+        - rm_ldap_vol.rc != 0
+        - "'no such volume' not in (rm_ldap_vol.stderr | lower)"
+
+    - name: Remove keycloak-data volume
+      ansible.builtin.command: podman volume rm -f keycloak-data
+      register: rm_kc_vol
+      changed_when: rm_kc_vol.rc == 0 and rm_kc_vol.stdout != ''
+      failed_when:
+        - rm_kc_vol.rc != 0
+        - "'no such volume' not in (rm_kc_vol.stderr | lower)"
 
 - name: Enable and start IdP stack (rootless)
   become: true
   become_user: secos
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
-  systemd:
+  ansible.builtin.systemd:
     name: secos-idp
     enabled: true
     state: started
@@ -156,18 +267,18 @@
   meta: flush_handlers
 
 - name: Wait for OpenLDAP to accept connections
-  wait_for:
+  ansible.builtin.wait_for:
     host: 127.0.0.1
     port: 389
     timeout: 120
 
 - name: Install openldap-clients (needed for readiness check + backup script)
-  dnf:
+  ansible.builtin.dnf:
     name: openldap-clients
     state: present
 
 - name: Wait for LDAP base DN (first-boot LDIF import)
-  command: ldapsearch -x -H ldap://127.0.0.1:389 -b "dc=bastion,dc=local" -s base
+  ansible.builtin.command: ldapsearch -x -H ldap://127.0.0.1:389 -b "dc=bastion,dc=local" -s base
   register: ldap_base_check
   until: ldap_base_check.rc == 0
   retries: 30
@@ -176,24 +287,24 @@
 
 # ── Firewall ──
 - name: Install firewalld
-  dnf:
+  ansible.builtin.dnf:
     name: firewalld
     state: present
 
 - name: Deploy firewalld internal zone
-  template:
+  ansible.builtin.template:
     src: firewalld-internal-bastion.xml.j2
     dest: /etc/firewalld/zones/internal-bastion.xml
   notify: reload firewalld
 
 - name: Deploy firewalld public zone
-  template:
+  ansible.builtin.template:
     src: firewalld-public.xml.j2
     dest: /etc/firewalld/zones/public.xml
   notify: reload firewalld
 
 - name: Enable and start firewalld
-  systemd:
+  ansible.builtin.systemd:
     name: firewalld
     enabled: true
     state: started
@@ -203,22 +314,22 @@
 # secos rootless runtime, so any `podman exec` must hop into secos's user
 # namespace via `sudo -iu secos` (which inherits XDG_RUNTIME_DIR via linger).
 - name: Install NFS utils and cronie
-  dnf:
+  ansible.builtin.dnf:
     name:
       - nfs-utils
       - cronie
     state: present
 
 - name: Mount NFS backup share
-  mount:
+  ansible.posix.mount:
     path: /mnt/backups
-    src: "192.168.56.50:/export/backups"
-    fstype: nfs4
-    opts: _netdev,defaults
+    src: "{{ secos_storage_ip }}:/export/backups"
+    fstype: nfs
+    opts: "{{ secos_nfs_mount_opts }}"
     state: mounted
 
 - name: Deploy LDAP backup script
-  copy:
+  ansible.builtin.copy:
     dest: /opt/secos/bin/secos-backup-ldap
     owner: root
     group: root
@@ -233,7 +344,7 @@
       mkdir -p /mnt/backups/ldap
       OUT=/mnt/backups/ldap/ldap-$(date +%F).ldif.gz
       TMP=$OUT.tmp
-      # `-y file` would include any trailing newline as part of the password
+      # `-y file` would include the trailing newline as part of the password
       # and OpenLDAP returns rc=49. Read explicitly and pass via -w.
       PW=$(tr -d '\n' < /var/lib/secos/secos/idp/openldap/admin_password)
       ldapsearch -x -H ldap://127.0.0.1:389 -D "cn=admin,dc=bastion,dc=local" \
@@ -246,7 +357,7 @@
       find /mnt/backups/ldap/ -name "*.ldif.gz" -mtime +7 -delete
 
 - name: Deploy Keycloak backup script
-  copy:
+  ansible.builtin.copy:
     dest: /opt/secos/bin/secos-backup-keycloak
     owner: root
     group: root
@@ -281,7 +392,7 @@
       find /mnt/backups/keycloak/ -maxdepth 1 -name 'keycloak-realm-bastion-*.json.gz' -mtime +7 -delete
 
 - name: Deploy config backup script
-  copy:
+  ansible.builtin.copy:
     dest: /opt/secos/bin/secos-backup-configs
     mode: "0755"
     content: |
@@ -291,7 +402,7 @@
       rsync -a /etc/ /mnt/backups/configs/idp-node/
 
 - name: Daily LDAP backup cron
-  cron:
+  ansible.builtin.cron:
     name: backup-ldap
     minute: "0"
     hour: "2"
@@ -299,7 +410,7 @@
     job: /opt/secos/bin/secos-backup-ldap
 
 - name: Daily Keycloak realm export cron
-  cron:
+  ansible.builtin.cron:
     name: backup-keycloak
     minute: "30"
     hour: "2"
@@ -307,7 +418,7 @@
     job: /opt/secos/bin/secos-backup-keycloak
 
 - name: Daily config backup cron
-  cron:
+  ansible.builtin.cron:
     name: backup-configs
     minute: "0"
     hour: "3"
@@ -315,7 +426,7 @@
     job: /opt/secos/bin/secos-backup-configs
 
 - name: Enable crond
-  systemd:
+  ansible.builtin.systemd:
     name: crond
     enabled: true
     state: started

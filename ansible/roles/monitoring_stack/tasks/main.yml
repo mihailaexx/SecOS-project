@@ -4,19 +4,19 @@
 # bind-mounted configs, and the systemd user unit share one ownership domain.
 
 - name: Remove legacy rootful monitoring unit (if upgrading from previous deploy)
-  systemd:
+  ansible.builtin.systemd:
     name: secos-monitoring
     state: stopped
     enabled: false
   failed_when: false
 
 - name: Remove legacy rootful unit file
-  file:
+  ansible.builtin.file:
     path: /etc/systemd/system/secos-monitoring.service
     state: absent
 
 - name: Remove legacy /etc/secos monitoring config tree
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
@@ -26,7 +26,7 @@
     - /opt/secos/monitoring
 
 - name: Create rootless config tree under secos $HOME
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: secos
@@ -40,7 +40,7 @@
     - /var/lib/secos/secos/monitoring/grafana/dashboards
 
 - name: Deploy Prometheus scrape config
-  template:
+  ansible.builtin.template:
     src: prometheus.yml.j2
     dest: /var/lib/secos/secos/monitoring/prometheus/prometheus.yml
     owner: secos
@@ -49,7 +49,7 @@
   notify: restart monitoring
 
 - name: Deploy Loki config
-  copy:
+  ansible.builtin.copy:
     src: loki.yml
     dest: /var/lib/secos/secos/monitoring/loki/config.yml
     owner: secos
@@ -58,7 +58,7 @@
   notify: restart monitoring
 
 - name: Deploy Grafana datasources
-  copy:
+  ansible.builtin.copy:
     src: datasources.yml
     dest: /var/lib/secos/secos/monitoring/grafana/datasources.yml
     owner: secos
@@ -67,7 +67,7 @@
   notify: restart monitoring
 
 - name: Deploy Grafana dashboards provider
-  copy:
+  ansible.builtin.copy:
     src: dashboards-provider.yml
     dest: /var/lib/secos/secos/monitoring/grafana/dashboards-provider.yml
     owner: secos
@@ -76,7 +76,7 @@
   notify: restart monitoring
 
 - name: Deploy Grafana dashboards
-  copy:
+  ansible.builtin.copy:
     src: node-overview.json
     dest: /var/lib/secos/secos/monitoring/grafana/dashboards/node-overview.json
     owner: secos
@@ -85,8 +85,8 @@
   notify: restart monitoring
 
 - name: Generate Grafana admin password
-  copy:
-    content: "{{ lookup('password', '/tmp/secos-grafana-admin-password length=24 chars=ascii_letters,digits') }}"
+  ansible.builtin.copy:
+    content: "{{ lookup('password', secos_password_cache_dir ~ '/grafana-admin-password length=24 chars=ascii_letters,digits') }}"
     dest: /var/lib/secos/secos/monitoring/grafana/admin_password
     owner: secos
     group: secos
@@ -94,7 +94,7 @@
   no_log: true
 
 - name: Deploy compose file
-  copy:
+  ansible.builtin.copy:
     src: "{{ playbook_dir }}/../containers/monitoring/compose.yml"
     dest: /var/lib/secos/secos/monitoring/compose.yml
     owner: secos
@@ -103,7 +103,7 @@
   notify: restart monitoring
 
 - name: Install monitoring systemd user unit
-  copy:
+  ansible.builtin.copy:
     src: secos-monitoring.service
     dest: /var/lib/secos/.config/systemd/user/secos-monitoring.service
     owner: secos
@@ -118,7 +118,7 @@
   become_user: secos
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ secos_uid }}"
-  systemd:
+  ansible.builtin.systemd:
     name: secos-monitoring
     enabled: true
     state: started

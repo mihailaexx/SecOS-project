@@ -1,3 +1,9 @@
+#jinja2: lstrip_blocks: True
+# Rendered by the idp role. Passwords are substituted at deploy time so
+# podman-compose never has to do env-var substitution (which has been
+# inconsistent across versions). The dev-mode template at
+# containers/idp/compose.yml uses ${VAR} placeholders for use with a
+# shell-loaded .env when running compose by hand.
 services:
   openldap:
     image: docker.io/bitnamilegacy/openldap:latest
@@ -15,7 +21,7 @@ services:
     environment:
       LDAP_ROOT: dc=bastion,dc=local
       LDAP_ADMIN_USERNAME: admin
-      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_ADMIN_PASSWORD: "{{ secos_openldap_admin_password }}"
       LDAP_PORT_NUMBER: "1389"
       LDAP_ENABLE_TLS: "no"
       LDAP_CUSTOM_LDIF_DIR: /ldifs
@@ -39,8 +45,6 @@ services:
     container_name: keycloak
     hostname: keycloak
     restart: on-failure
-    # Rootless: in-container UID 0 maps to host `secos`. See monitoring compose
-    # for the full rationale.
     user: "0:0"
     cap_drop: [ALL]
     security_opt:
@@ -59,7 +63,7 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_DB: dev-file
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "{{ secos_keycloak_admin_password }}"
     command: ["start-dev", "--import-realm"]
     volumes:
       - /var/lib/secos/secos/idp/keycloak/import:/opt/keycloak/data/import:ro,Z
