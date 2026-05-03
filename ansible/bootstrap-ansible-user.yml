@@ -9,17 +9,25 @@
 #
 # After this completes, `site.yml` runs as `ansible` via inventory defaults.
 # Re-running the playbook later is a no-op (idempotent).
+#
+# NOTE: lb-node listens on 2222 only AFTER `site.yml` has flipped its sshd
+# (see the lb-bootstrap play in site.yml). On a truly fresh fleet, skip
+# lb here (`--limit '!lb'`) and run site.yml first to open 2222, then
+# rerun this playbook against all hosts.
 - name: Create ansible provisioning account
   hosts: all:!hypervisor
+  become: true
   tasks:
     - name: Ensure wheel group exists
-      group:
+      ansible.builtin.group:
         name: wheel
         state: present
 
+    # Pin a stable uid so later assertions on `id ansible` are deterministic.
     - name: Create ansible user (key auth, NOPASSWD sudo)
-      user:
+      ansible.builtin.user:
         name: ansible
+        uid: 990
         # /var/lib avoids autofs collisions on bastions where /home is NFS.
         home: /var/lib/ansible
         create_home: true
@@ -28,14 +36,34 @@
         password_lock: true
         state: present
 
+    # /var/lib is var_lib_t by default; ssh logging into the ansible user
+    # would hit AVCs writing ~/.ssh/known_hosts. Equivalence-map to /home
+    # so the home is labeled user_home_dir_t even though the path is custom.
+    - name: SELinux fcontext equivalence (var/lib/ansible → /home)
+      ansible.builtin.command: semanage fcontext -a -e /home /var/lib/ansible
+      register: fcontext_eq
+      changed_when: fcontext_eq.rc == 0
+      failed_when:
+        - fcontext_eq.rc != 0
+        - "'already' not in fcontext_eq.stderr"
+
+    - name: Apply SELinux context to ansible home
+      ansible.builtin.command: restorecon -RFv /var/lib/ansible
+      register: restorecon_ansible_home
+      changed_when: "'restored context' in restorecon_ansible_home.stdout"
+
+    # Resolve pubkey via the inventory-declared private key (with .pub
+    # suffix), so every operator pushes their *own* matching pubkey
+    # rather than whatever happens to live at $HOME/.ssh/id_ed25519.pub.
+    # Override with -e bootstrap_pubkey_path=/path/to/key.pub if needed.
     - name: Authorize provisioning SSH key for ansible
-      authorized_key:
+      ansible.posix.authorized_key:
         user: ansible
-        key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_ed25519.pub') }}"
+        key: "{{ lookup('file', bootstrap_pubkey_path | default(ansible_ssh_private_key_file ~ '.pub')) }}"
         state: present
 
     - name: Grant passwordless sudo to ansible
-      copy:
+      ansible.builtin.copy:
         dest: /etc/sudoers.d/ansible
         content: "ansible ALL=(ALL) NOPASSWD:ALL\n"
         owner: root
@@ -51,27 +79,26 @@
 # new user under the existing config.
 - name: Update bastion sshd drop-in for ansible pubkey bypass
   hosts: bastions
+  become: true
   tasks:
     - name: Deploy sshd bastion auth drop-in (ansible bypass via pubkey)
-      template:
+      ansible.builtin.template:
         src: roles/bastion/templates/40-bastion-auth.conf.j2
         dest: /etc/ssh/sshd_config.d/40-bastion-auth.conf
         owner: root
         group: root
         mode: "0644"
+        validate: "/usr/sbin/sshd -t -f %s"
       register: sshd_dropin
 
     - name: Fix SELinux context on sshd drop-in
-      command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
-      changed_when: false
-
-    - name: Validate sshd config before restart
-      command: sshd -t
-      changed_when: false
+      ansible.builtin.command: restorecon -v /etc/ssh/sshd_config.d/40-bastion-auth.conf
+      register: restorecon_sshd
+      changed_when: "'restored context' in restorecon_sshd.stdout"
       when: sshd_dropin.changed
 
     - name: Restart sshd to activate ansible pubkey auth
-      systemd:
+      ansible.builtin.systemd:
         name: sshd
         state: restarted
       when: sshd_dropin.changed
