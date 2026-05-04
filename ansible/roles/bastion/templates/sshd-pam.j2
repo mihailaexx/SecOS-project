@@ -7,6 +7,15 @@ auth       requisite                   pam_deny.so
 auth       required                    pam_permit.so
 account    required                    pam_nologin.so
 account    required                    pam_permit.so
+# pam_selinux.so close MUST run before any other session module that might
+# exec a child (pam_unix runs the post-login command, pam_mkhomedir execs
+# oddjob-mkhomedir). Without it, the new pty inherits sshd_t and ssh's own
+# `ssh_selinux_setup_pty` returns EINVAL when computing the relabel.
+session    required                    pam_selinux.so close
+session    required                    pam_loginuid.so
 session    required                    pam_limits.so
 session    required                    pam_unix.so
 session    optional                    pam_mkhomedir.so
+# pam_selinux.so open MUST be the last session module so the user's mapped
+# SELinux context (per `semanage login`) replaces sshd_t before exec.
+session    required                    pam_selinux.so open env_params
