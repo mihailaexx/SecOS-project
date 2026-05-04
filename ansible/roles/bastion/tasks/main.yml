@@ -207,7 +207,7 @@
 - name: Create user m.bulushev
   ansible.builtin.user:
     name: m.bulushev
-    uid: 1001
+    uid: 2010
     group: bastion-users
     groups: bastion-users
     shell: /bin/bash
@@ -216,7 +216,7 @@
 - name: Create user admin1
   ansible.builtin.user:
     name: admin1
-    uid: 1002
+    uid: 2011
     group: bastion-admins
     groups: bastion-users,bastion-admins
     shell: /bin/bash
@@ -225,7 +225,7 @@
 - name: Create user dba1
   ansible.builtin.user:
     name: dba1
-    uid: 1003
+    uid: 2012
     group: dba
     groups: bastion-users,dba
     shell: /bin/bash

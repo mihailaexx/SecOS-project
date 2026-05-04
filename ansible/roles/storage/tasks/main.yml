@@ -55,9 +55,9 @@
     group: "{{ item.gid }}"
     mode: "0700"
   loop:
-    - { name: m.bulushev, uid: "1001", gid: "2000" }
-    - { name: admin1, uid: "1002", gid: "2001" }
-    - { name: dba1, uid: "1003", gid: "2002" }
+    - { name: m.bulushev, uid: "2010", gid: "2000" }
+    - { name: admin1, uid: "2011", gid: "2001" }
+    - { name: dba1, uid: "2012", gid: "2002" }
 
 - name: Create backup directories
   ansible.builtin.file:

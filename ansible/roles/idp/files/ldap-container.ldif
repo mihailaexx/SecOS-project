@@ -22,7 +22,7 @@ objectClass: posixAccount
 uid: m.bulushev
 cn: Mikhail Bulushev
 sn: Bulushev
-uidNumber: 1001
+uidNumber: 2010
 gidNumber: 2000
 homeDirectory: /home/m.bulushev
 loginShell: /bin/bash
@@ -34,7 +34,7 @@ objectClass: posixAccount
 uid: admin1
 cn: Admin One
 sn: Admin
-uidNumber: 1002
+uidNumber: 2011
 gidNumber: 2001
 homeDirectory: /home/admin1
 loginShell: /bin/bash
@@ -46,7 +46,7 @@ objectClass: posixAccount
 uid: dba1
 cn: DBA One
 sn: DBA
-uidNumber: 1003
+uidNumber: 2012
 gidNumber: 2002
 homeDirectory: /home/dba1
 loginShell: /bin/bash

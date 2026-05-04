@@ -23,7 +23,7 @@
 - name: Create local dba1 user
   user:
     name: dba1
-    uid: 1003
+    uid: 2012
     group: dba
     shell: /bin/bash
     create_home: false
